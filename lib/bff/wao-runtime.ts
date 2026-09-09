@@ -45,12 +45,106 @@ type WaoAgent = {
   project_id?: string;
 };
 
+type WorkloadClaims = {
+  sub?: unknown;
+  tenant_id?: unknown;
+  project_id?: unknown;
+  exp?: unknown;
+  iss?: unknown;
+  aud?: unknown;
+};
+
+let cachedWorkloadToken: { token: string; expiresAt: number } | null = null;
+
+function oidcConfig() {
+  const tokenUrl = process.env.STRUCTCAPTURE_WAO_OIDC_TOKEN_URL?.trim();
+  const clientId = process.env.STRUCTCAPTURE_WAO_OIDC_CLIENT_ID?.trim();
+  const clientSecret = process.env.STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET?.trim();
+  const issuer = process.env.STRUCTCAPTURE_WAO_OIDC_ISSUER?.trim();
+  const audience = process.env.STRUCTCAPTURE_WAO_OIDC_AUDIENCE?.trim();
+  if (!tokenUrl || !clientId || !clientSecret || !issuer || !audience) return null;
+  try {
+    const url = new URL(tokenUrl);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && url.hostname === "localhost")) return null;
+    return { tokenUrl: url.toString(), clientId, clientSecret, issuer, audience };
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtClaims(token: string): WorkloadClaims | null {
+  const encodedClaims = token.split(".")[1];
+  if (!encodedClaims) return null;
+  try {
+    const padded = encodedClaims.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encodedClaims.length / 4) * 4, "=");
+    return JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as WorkloadClaims;
+  } catch {
+    return null;
+  }
+}
+
+function verifiedWorkloadToken(
+  token: string,
+  expected: Pick<Required<WaoAgent>, "tenant_id" | "project_id">,
+  config: NonNullable<ReturnType<typeof oidcConfig>>,
+) {
+  // This is an early configuration/scope guard only. WAO remains the authority
+  // that verifies the OIDC signature against its configured JWKS.
+  const claims = decodeJwtClaims(token);
+  const now = Math.floor(Date.now() / 1_000);
+  const audience = Array.isArray(claims?.aud) ? claims.aud : [claims?.aud];
+  if (
+    !claims ||
+    typeof claims.sub !== "string" || !claims.sub ||
+    claims.tenant_id !== expected.tenant_id ||
+    claims.project_id !== expected.project_id ||
+    typeof claims.exp !== "number" || claims.exp <= now + 15 ||
+    claims.iss !== config.issuer ||
+    !audience.includes(config.audience)
+  ) return null;
+  return { token, expiresAt: claims.exp * 1_000 };
+}
+
+async function obtainWorkloadToken(
+  agent: Pick<Required<WaoAgent>, "tenant_id" | "project_id">,
+  signal: AbortSignal,
+) {
+  const config = oidcConfig();
+  if (!config) return null;
+  if (cachedWorkloadToken && cachedWorkloadToken.expiresAt > Date.now() + 60_000) {
+    return cachedWorkloadToken.token;
+  }
+  const body = new URLSearchParams({ grant_type: "client_credentials", audience: config.audience });
+  const scope = process.env.STRUCTCAPTURE_WAO_OIDC_SCOPE?.trim();
+  if (scope) body.set("scope", scope);
+  try {
+    const response = await fetch(config.tokenUrl, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body,
+      cache: "no-store",
+      signal,
+    });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    const payload = await response.json() as { access_token?: unknown };
+    if (typeof payload.access_token !== "string") throw new Error("missing access token");
+    const workloadToken = verifiedWorkloadToken(payload.access_token, agent, config);
+    if (!workloadToken) throw new Error("unexpected workload token claims");
+    cachedWorkloadToken = workloadToken;
+    return workloadToken.token;
+  } catch (error) {
+    const reason = error instanceof DOMException && error.name === "TimeoutError" ? "timeout" : "unavailable";
+    console.warn("WAO workload OIDC token is unavailable or has incompatible claims", { reason });
+    return null;
+  }
+}
+
 /**
- * WAO 0.6 lists the configured StructCapture Agent, but its public Agent chat
- * and OpenAI-compatible completion handlers hard-code the EV-repair RAG prompt.
- * They are therefore deliberately not invoked for home inventory data. This
- * preserves the BFF's domain boundary until WAO offers a pack-aware generic
- * Agent invocation surface.
+ * Resolve the claims-scoped generic WAO Agent, then send a pack-aware
+ * single-turn request. The BFF still owns all Capture business state and HITL.
  */
 export async function enrichWithWaoAgent(
   pack: KnowledgePack,
@@ -60,13 +154,11 @@ export async function enrichWithWaoAgent(
   const configuredAgent = process.env.STRUCTCAPTURE_WAO_AGENT_ID?.trim() || "structcapture-organizer";
   if (!baseUrl || !configuredAgent || !pack.id || !shots.length) return null;
 
-  // Resolve from the read-only catalog even for a configured UUID. This checks
-  // the configured asset and its required claims scope without sending capture
-  // content to an incompatible WAO 0.6 chat endpoint.
+  const signal = AbortSignal.timeout(requestTimeout());
   try {
     const response = await fetch(`${baseUrl}/api/v1/agents`, {
       cache: "no-store",
-      signal: AbortSignal.timeout(requestTimeout()),
+      signal,
     });
     if (!response.ok) throw new Error(`status ${response.status}`);
     const payload = await response.json() as { agents?: WaoAgent[] };
@@ -78,16 +170,31 @@ export async function enrichWithWaoAgent(
       console.warn("WAO StructCapture Agent is missing or has an unexpected scope", { configuredAgent });
       return null;
     }
+    const token = await obtainWorkloadToken(
+      { tenant_id: agent.tenant_id, project_id: agent.project_id },
+      signal,
+    );
+    if (!token) return null;
+    const includeImages = process.env.STRUCTCAPTURE_WAO_INCLUDE_IMAGES === "true";
+    const chatResponse = await fetch(`${baseUrl}/api/v1/agents/${encodeURIComponent(agent.id)}/chat`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        message: buildPrompt(pack, shots),
+        ...(includeImages ? { images: shots.flatMap((shot) => shot.imageUrl ? [shot.imageUrl] : []) } : {}),
+      }),
+      cache: "no-store",
+      signal,
+    });
+    if (!chatResponse.ok) {
+      console.warn("WAO Agent chat request failed", { status: chatResponse.status });
+      return null;
+    }
+    return parseEnrichment(await chatResponse.json(), pack, shots);
   } catch {
-    console.warn("WAO Agent catalog is unavailable; using model gateway fallback");
+    console.warn("WAO Agent path is unavailable; using model gateway fallback");
     return null;
   }
-
-  console.warn(
-    "WAO 0.6 Agent invocation is not used: it requires a trusted JWT and its available chat surface is EV-repair-specific",
-    { pack: pack.id },
-  );
-  return null;
 }
 
 function chatCompletionsUrl() {
@@ -128,7 +235,7 @@ function textFromResponse(payload: unknown): string | null {
   if ("summary" in record || "fields" in record) return JSON.stringify(record);
   // Some reasoning-model gateways leave content blank and place their final JSON
   // in reasoning_content. Prefer normal content, using reasoning only as a fallback.
-  for (const key of ["content", "message", "response", "output", "text", "reasoning_content"]) {
+  for (const key of ["answer", "content", "message", "response", "output", "text", "reasoning_content"]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return value;
     if (value && typeof value === "object") {
@@ -182,9 +289,8 @@ function isTranscriptDump(value: string, shots: Shot[]) {
 }
 
 /**
- * The model gateway is optional. This BFF does not call WAO's domain-specific
- * Agent chat; it only sends a prompt to a separately configured OpenAI-compatible
- * endpoint. Capture business data and HITL state remain in this BFF.
+ * The model gateway is optional fallback. Capture business data and HITL state
+ * remain in this BFF.
  */
 export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[]): Promise<WaoEnrichment | null> {
   const endpoint = chatCompletionsUrl();
