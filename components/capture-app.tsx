@@ -64,6 +64,7 @@ async function compressImage(file: File): Promise<string> {
 export function CaptureApp() {
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [shots, setShots] = useState<Shot[]>([]);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | undefined>();
   const [caption, setCaption] = useState("");
   const [direction, setDirection] = useState("");
   const [message, setMessage] = useState("");
@@ -95,6 +96,7 @@ export function CaptureApp() {
     await storage.create(local);
     setSession(local);
     setShots([]);
+    setPreviewImageUrl(undefined);
     setCaption("");
     setDirection(getSchema(schemaId)?.prompts[0] ?? "");
     setMessage("拍录会话已创建，数据先保存在此设备。");
@@ -106,6 +108,7 @@ export function CaptureApp() {
     if (session) await storage.remove(session.id);
     setSession(null);
     setShots([]);
+    setPreviewImageUrl(undefined);
     setCaption("");
     setDirection("");
     setOrganized(null);
@@ -114,36 +117,39 @@ export function CaptureApp() {
     setTranscriptionMessage("");
   }
 
-  async function addShot(file?: File) {
-    if (!session || (!caption.trim() && !direction.trim())) {
-      setMessage("请至少写下这张照片的说明或拍摄指引。");
-      return;
-    }
-    let imageUrl: string | undefined;
+  async function selectPhoto(file?: File) {
+    if (!session || !file) return;
     try {
-      imageUrl = file ? await compressImage(file) : undefined;
+      const imageUrl = await compressImage(file);
+      if (shots.reduce((total, shot) => total + (shot.imageUrl?.length ?? 0), 0) + imageUrl.length > MAX_SESSION_IMAGE_DATA_URL_LENGTH) {
+        setMessage("本次拍录的照片已接近上传上限，请先整理或减少照片。");
+        return;
+      }
+      setPreviewImageUrl(imageUrl);
+      setMessage("照片已就绪。补充说明后，点击“保存本条”。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "图片处理失败，请重试。");
-      return;
     }
-    // Keep request JSON below Vercel Hobby's body limit; photos use data URLs
-    // only for this POC until object storage is introduced.
-    if (imageUrl && shots.reduce((total, shot) => total + (shot.imageUrl?.length ?? 0), 0) + imageUrl.length > MAX_SESSION_IMAGE_DATA_URL_LENGTH) {
-      setMessage("本次拍录的照片已接近上传上限，请先整理或减少照片。");
+  }
+
+  async function saveShot() {
+    if (!session || (!previewImageUrl && !caption.trim() && !direction.trim())) {
+      setMessage("请先拍照，或至少写下这条记录的说明。");
       return;
     }
     const shot: Shot = {
       id: makeId(), sessionId: session.id, caption: caption.trim(), direction: direction.trim(),
-      createdAt: new Date().toISOString(), imageUrl,
+      createdAt: new Date().toISOString(), imageUrl: previewImageUrl,
     };
     await storage.saveShot(session.id, shot);
     setShots((current) => [...current, shot]);
+    setPreviewImageUrl(undefined);
     setCaption("");
     const nextPrompt = schema?.prompts[shots.length + 1];
     setDirection(nextPrompt ?? "");
     setMessage(nextPrompt
-      ? `${file ? "照片和说明" : "说明"}已加入会话。下一步：${nextPrompt}`
-      : `${file ? "照片和说明" : "说明"}已加入会话。已完成拍摄指引；如有需要，可继续补充照片或说明。`);
+      ? "本条已保存。下一步：" + nextPrompt
+      : "本条已保存。已完成拍摄指引；如有需要，可继续补充照片或说明。");
     wao.uploadShot(session.id, { caption: shot.caption, direction: shot.direction, imageUrl: shot.imageUrl }).catch(() => undefined);
   }
 
@@ -249,24 +255,32 @@ export function CaptureApp() {
           <button onClick={goHome} className="flex items-center gap-1 rounded-lg border border-[#c7d7d3] px-2 py-1 text-sm font-semibold text-teal-800"><House size={15} />回首页 / 换模板</button>
         </div>
       </header>
-      <section className="rounded-2xl bg-teal-800 p-5 text-white">
-        <div className="flex items-center gap-2 text-sm text-teal-100"><Sparkles size={16} /> 当前拍摄指引</div>
-        <p className="mt-2 text-lg font-semibold">{direction || "写下你想拍什么"}</p>
+      <section className="mt-5 rounded-2xl border border-[#d9e6e3] bg-white p-5 shadow-sm">
+        <p className="text-sm font-semibold text-teal-800">1. 先拍照</p>
+        {previewImageUrl ? (
+          <div className="mt-3 overflow-hidden rounded-xl border border-[#c7d7d3] bg-[#f4f8f7]">
+            <img src={previewImageUrl} alt="待保存的照片预览" className="aspect-[4/3] w-full object-cover" />
+            <p className="p-3 text-sm text-[#607272]">这是待保存的照片；可重新拍摄，或继续补充本条信息。</p>
+          </div>
+        ) : <p className="mt-2 text-sm leading-5 text-[#607272]">先拍下现场，再补充文字说明。也可以跳过拍照，仅保存文字记录。</p>}
+        <input ref={fileRef} onChange={async (event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; await selectPhoto(file); }} accept="image/*" capture="environment" type="file" className="hidden" />
+        <button type="button" onClick={() => fileRef.current?.click()} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-3 font-semibold text-white"><Camera size={18} />{previewImageUrl ? "重新拍摄" : "拍照 / 选择照片"}</button>
       </section>
       <section className="mt-5 rounded-2xl border border-[#d9e6e3] bg-white p-5 shadow-sm">
+        <div className="rounded-xl bg-teal-800 p-4 text-white">
+          <div className="flex items-center gap-2 text-sm text-teal-100"><Sparkles size={16} /> 2. 记录信息</div>
+          <p className="mt-1 font-semibold">{direction || "补充这张照片说明的内容"}</p>
+        </div>
         <div className="flex items-center justify-between gap-3">
-          <label className="text-sm font-semibold" htmlFor="shot-caption">这张照片说明什么？</label>
+          <label className="mt-4 text-sm font-semibold" htmlFor="shot-caption">这条记录说明什么？</label>
           <button type="button" onClick={toggleTranscription} aria-pressed={isRecording} className="flex shrink-0 items-center gap-1 rounded-lg border border-teal-800 px-2 py-1 text-xs font-semibold text-teal-800 disabled:cursor-not-allowed disabled:opacity-60"><Mic size={15} />{isRecording ? "停止录音" : "录音转文字"}</button>
         </div>
         <textarea id="shot-caption" value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="例如：左侧缓冲区已放置警示锥…" className="mt-2 min-h-24 w-full resize-none rounded-xl border border-[#c7d7d3] p-3 outline-none focus:border-teal-700" />
         {transcriptionMessage && <p role="status" className="mt-2 text-sm text-[#607272]">{transcriptionMessage}</p>}
         <label className="mt-4 block text-sm font-semibold">拍摄指引（可修改）</label>
         <input value={direction} onChange={(event) => setDirection(event.target.value)} className="mt-2 w-full rounded-xl border border-[#c7d7d3] p-3 outline-none focus:border-teal-700" />
-        <input ref={fileRef} onChange={async (event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; await addShot(file); }} accept="image/*" capture="environment" type="file" className="hidden" />
-        <div className="mt-5 grid grid-cols-2 gap-3">
-          <button onClick={() => fileRef.current?.click()} className="flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-3 font-semibold text-white"><Camera size={18} />拍照</button>
-          <button onClick={() => addShot()} className="rounded-xl border border-teal-800 px-4 py-3 font-semibold text-teal-800">仅记录文字</button>
-        </div>
+        <button type="button" onClick={saveShot} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#102a2a] px-4 py-3 font-semibold text-white"><CheckCircle2 size={18} />保存本条</button>
+        <p className="mt-2 text-center text-xs text-[#607272]">没有照片？直接填写说明后保存本条即可。</p>
       </section>
       {message && <p role="status" className="mt-4 rounded-xl bg-[#e7f5f2] p-3 text-sm text-teal-900">{message}</p>}
       {shots.length > 0 && <section className="mt-6"><h2 className="mb-3 font-bold">本次照片</h2><div className="space-y-2">{shots.map((shot, index) => <div key={shot.id} className="flex items-center gap-3 rounded-xl border border-[#d9e6e3] bg-white p-3">{shot.imageUrl ? <img src={shot.imageUrl} alt={shot.caption || "已拍摄照片"} className="size-12 rounded-lg object-cover" /> : <div className="grid size-12 place-items-center rounded-lg bg-[#d7f1ee] text-teal-800">{index + 1}</div>}<div className="min-w-0"><p className="truncate font-medium">{shot.caption || "未填写说明"}</p><p className="truncate text-sm text-[#607272]">{shot.direction}</p></div></div>)}</div></section>}
