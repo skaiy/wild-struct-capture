@@ -84,7 +84,8 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack): WaoEnrichment |
   if (inputFields && typeof inputFields === "object" && !Array.isArray(inputFields)) {
     for (const [key, rawField] of Object.entries(inputFields)) {
       if (!allowedKeys.has(key)) continue;
-      const raw = typeof rawField === "object" && rawField ? rawField as Record<string, unknown> : { value: rawField };
+      const raw: Record<string, unknown> =
+        typeof rawField === "object" && rawField ? rawField as Record<string, unknown> : { value: rawField };
       const value = typeof raw.value === "string" ? raw.value.trim() : "";
       if (value) fields[key] = { value, confidence: raw.confidence === "high" ? "high" : "medium" };
     }
