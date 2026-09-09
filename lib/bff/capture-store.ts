@@ -2,6 +2,7 @@ import type { CaptureSession, OrganizedCapture, SchemaId, Shot } from "@/lib/typ
 
 export type CaptureStore = {
   createSession(schemaId: SchemaId): CaptureSession;
+  saveSession(session: CaptureSession): CaptureSession;
   getSession(sessionId: string): CaptureSession | undefined;
   addShot(sessionId: string, shot: Shot): Shot | undefined;
   listShots(sessionId: string): Shot[] | undefined;
@@ -24,6 +25,11 @@ class InMemoryCaptureStore implements CaptureStore {
       createdAt: new Date().toISOString(),
       shots: [],
     };
+    this.sessions.set(session.id, session);
+    return session;
+  }
+
+  saveSession(session: CaptureSession) {
     this.sessions.set(session.id, session);
     return session;
   }

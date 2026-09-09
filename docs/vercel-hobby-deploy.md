@@ -12,11 +12,15 @@
 
 ## 设置环境变量
 
-在 Vercel 项目 **Settings → Environment Variables** 中配置。仅在需要连接 WAO 时设置下列变量；没有它时，应用会自动使用 DevStub，演示和离线拍录仍可完成。
+在 Vercel 项目 **Settings → Environment Variables** 中配置。没有 `WAO_BASE_URL` 时，应用会自动使用 DevStub；没有 `STRUCTCAPTURE_LLM_*` 时，Capture BFF 仍会用本地占位字段完成整理，演示和离线拍录仍可完成。
 
 | 名称 | Production | Preview | Development | 是否公开 |
 | --- | --- | --- | --- | --- |
 | `WAO_BASE_URL` | `http://198.12.81.152:8088` 或 HTTPS 反代地址 | 使用测试 WAO，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
+| `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址 | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
+| `STRUCTCAPTURE_LLM_MODEL` | 模型名（可选） | 测试模型名（可选） | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_LLM_TIMEOUT_MS` | 超时毫秒（可选） | 测试值（可选） | 本地 `.env.local` 可选 | 否 |
 
 `WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。当前演示端点的健康检查：
 

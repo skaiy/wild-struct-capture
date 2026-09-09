@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, CheckCircle2, ChevronRight, ClipboardList, Sparkles } from "lucide-react";
+import { Camera, CheckCircle2, ChevronRight, ClipboardList, House, Sparkles } from "lucide-react";
 import { schemas, getSchema } from "@/lib/schemas";
 import { LocalStorageProvider } from "@/lib/storage";
 import type { CaptureSession, OrganizedCapture, SchemaId, Shot } from "@/lib/types";
@@ -9,6 +9,37 @@ import { createWaoClient } from "@/lib/wao-client";
 import { OrganizeResult } from "@/components/organize-result";
 
 const makeId = () => crypto.randomUUID();
+const MAX_IMAGE_DATA_URL_LENGTH = 900_000;
+const MAX_SESSION_IMAGE_DATA_URL_LENGTH = 3_000_000;
+
+async function compressImage(file: File): Promise<string> {
+  const sourceUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("图片无法读取"));
+      element.src = sourceUrl;
+    });
+    const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(image.width * scale);
+    canvas.height = Math.round(image.height * scale);
+    canvas.getContext("2d")?.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.78));
+    if (!blob) throw new Error("图片压缩失败");
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(new Error("图片读取失败"));
+      reader.readAsDataURL(blob);
+    });
+    if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) throw new Error("图片压缩后仍过大，请选择更小的照片");
+    return dataUrl;
+  } finally {
+    URL.revokeObjectURL(sourceUrl);
+  }
+}
 
 export function CaptureApp() {
   const [session, setSession] = useState<CaptureSession | null>(null);
@@ -37,12 +68,34 @@ export function CaptureApp() {
     setMessage("拍录会话已创建，数据先保存在此设备。");
   }
 
+  async function goHome() {
+    if (session) await storage.remove(session.id);
+    setSession(null);
+    setShots([]);
+    setCaption("");
+    setDirection("");
+    setOrganized(null);
+    setMessage("");
+  }
+
   async function addShot(file?: File) {
     if (!session || (!caption.trim() && !direction.trim())) {
       setMessage("请至少写下这张照片的说明或拍摄指引。");
       return;
     }
-    const imageUrl = file ? URL.createObjectURL(file) : undefined;
+    let imageUrl: string | undefined;
+    try {
+      imageUrl = file ? await compressImage(file) : undefined;
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "图片处理失败，请重试。");
+      return;
+    }
+    // Keep request JSON below Vercel Hobby's body limit; photos use data URLs
+    // only for this POC until object storage is introduced.
+    if (imageUrl && shots.reduce((total, shot) => total + (shot.imageUrl?.length ?? 0), 0) + imageUrl.length > MAX_SESSION_IMAGE_DATA_URL_LENGTH) {
+      setMessage("本次拍录的照片已接近上传上限，请先整理或减少照片。");
+      return;
+    }
     const shot: Shot = {
       id: makeId(), sessionId: session.id, caption: caption.trim(), direction: direction.trim(),
       createdAt: new Date().toISOString(), imageUrl,
@@ -52,7 +105,7 @@ export function CaptureApp() {
     setCaption("");
     setDirection(schema?.prompts[Math.min(shots.length + 1, (schema?.prompts.length ?? 1) - 1)] ?? "");
     setMessage(file ? "照片和说明已加入会话。" : "已记录说明；可继续补拍照片。");
-    wao.uploadShot(session.id, { caption: shot.caption, direction: shot.direction }).catch(() => undefined);
+    wao.uploadShot(session.id, { caption: shot.caption, direction: shot.direction, imageUrl: shot.imageUrl }).catch(() => undefined);
   }
 
   async function organize() {
@@ -62,7 +115,7 @@ export function CaptureApp() {
     setOrganized(result);
   }
 
-  if (organized) return <OrganizeResult initial={organized} wao={wao} onBack={() => setOrganized(null)} />;
+  if (organized) return <OrganizeResult initial={organized} wao={wao} onBack={() => setOrganized(null)} onHome={goHome} />;
 
   if (!session) {
     return (
@@ -93,7 +146,10 @@ export function CaptureApp() {
     <main className="mx-auto min-h-screen max-w-lg px-5 py-6">
       <header className="mb-6 flex items-center justify-between">
         <div><p className="text-sm text-[#607272]">拍录中</p><h1 className="text-xl font-bold">{schema?.title}</h1></div>
-        <span className="rounded-full bg-[#d7f1ee] px-3 py-1 text-sm font-semibold text-teal-800">{shots.length} 张记录</span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-[#d7f1ee] px-3 py-1 text-sm font-semibold text-teal-800">{shots.length} 张记录</span>
+          <button onClick={goHome} className="flex items-center gap-1 rounded-lg border border-[#c7d7d3] px-2 py-1 text-sm font-semibold text-teal-800"><House size={15} />回首页 / 换模板</button>
+        </div>
       </header>
       <section className="rounded-2xl bg-teal-800 p-5 text-white">
         <div className="flex items-center gap-2 text-sm text-teal-100"><Sparkles size={16} /> 当前拍摄指引</div>
@@ -104,7 +160,7 @@ export function CaptureApp() {
         <textarea value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="例如：左侧缓冲区已放置警示锥…" className="mt-2 min-h-24 w-full resize-none rounded-xl border border-[#c7d7d3] p-3 outline-none focus:border-teal-700" />
         <label className="mt-4 block text-sm font-semibold">拍摄指引（可修改）</label>
         <input value={direction} onChange={(event) => setDirection(event.target.value)} className="mt-2 w-full rounded-xl border border-[#c7d7d3] p-3 outline-none focus:border-teal-700" />
-        <input ref={fileRef} onChange={(event) => addShot(event.target.files?.[0])} accept="image/*" capture="environment" type="file" className="hidden" />
+        <input ref={fileRef} onChange={async (event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; await addShot(file); }} accept="image/*" capture="environment" type="file" className="hidden" />
         <div className="mt-5 grid grid-cols-2 gap-3">
           <button onClick={() => fileRef.current?.click()} className="flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-3 font-semibold text-white"><Camera size={18} />拍照</button>
           <button onClick={() => addShot()} className="rounded-xl border border-teal-800 px-4 py-3 font-semibold text-teal-800">仅记录文字</button>

@@ -5,6 +5,7 @@ const KEY = "wild-struct-capture/sessions";
 export interface StorageProvider {
   create(session: CaptureSession): Promise<CaptureSession>;
   saveShot(sessionId: string, shot: Shot): Promise<void>;
+  remove(sessionId: string): Promise<void>;
   list(sessionId: string): Promise<Shot[]>;
 }
 
@@ -31,6 +32,10 @@ export class LocalStorageProvider implements StorageProvider {
     this.write(this.read().map((session) =>
       session.id === sessionId ? { ...session, shots: [...session.shots, shot] } : session,
     ));
+  }
+
+  async remove(sessionId: string) {
+    this.write(this.read().filter((session) => session.id !== sessionId));
   }
 
   async list(sessionId: string) {

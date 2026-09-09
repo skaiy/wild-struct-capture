@@ -14,7 +14,7 @@ function download(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-export function OrganizeResult({ initial, wao, onBack }: { initial: OrganizedCapture; wao: WaoClient; onBack: () => void }) {
+export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: OrganizedCapture; wao: WaoClient; onBack: () => void; onHome: () => void }) {
   const [capture, setCapture] = useState(initial);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
@@ -54,12 +54,12 @@ export function OrganizeResult({ initial, wao, onBack }: { initial: OrganizedCap
   return (
     <main className="mx-auto min-h-screen max-w-lg px-5 py-6">
       <header className="mb-6 flex items-center justify-between">
-        <div><p className="text-sm text-[#607272]">Wild AgentOS 整理结果</p><h1 className="text-xl font-bold">等待人工确认</h1></div>
+        <div><p className="text-sm text-[#607272]">Capture BFF 整理结果</p><h1 className="text-xl font-bold">等待人工确认</h1></div>
         <span className={`rounded-full px-3 py-1 text-sm font-semibold ${isApproved ? "bg-[#d7f1ee] text-teal-800" : "bg-amber-100 text-amber-800"}`}>{isApproved ? "已确认" : capture.status === "rejected" ? "已退回" : "待 HITL"}</span>
       </header>
       <section className="rounded-2xl border border-[#d9e6e3] bg-white p-5 shadow-sm">
         <h2 className="font-bold">结构化字段</h2>
-        <dl className="mt-3 divide-y divide-[#e6efed]">{capture.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : "待确认"}</span></dt><dd className="mt-1 font-medium">{field.value}</dd></div>)}</dl>
+        <dl className="mt-3 divide-y divide-[#e6efed]">{capture.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></dt><dd className="mt-1 font-medium">{field.value}</dd></div>)}</dl>
       </section>
       <section className="mt-6">
         <h2 className="mb-3 font-bold">定向照片</h2>
@@ -69,7 +69,8 @@ export function OrganizeResult({ initial, wao, onBack }: { initial: OrganizedCap
       {isApproved && <section className="mt-6 rounded-2xl bg-[#e7f5f2] p-5"><h2 className="font-bold text-teal-950">导出已确认记录</h2><div className="mt-3 grid grid-cols-2 gap-3"><button onClick={exportJson} className="flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-3 font-semibold text-white"><Download size={18} />JSON</button><button onClick={exportCsv} className="flex items-center justify-center gap-2 rounded-xl border border-teal-800 px-4 py-3 font-semibold text-teal-900"><Download size={18} />CSV</button></div></section>}
       {message && <p role="status" className="mt-4 rounded-xl bg-[#e7f5f2] p-3 text-sm text-teal-900">{message}</p>}
       <button onClick={onBack} className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl border border-[#102a2a] px-4 py-3 font-semibold text-[#102a2a]"><RotateCcw size={18} />返回继续拍录</button>
-      {capture.status === "pending_hitl" && <p className="mt-3 flex items-center justify-center gap-1 text-xs text-[#607272]"><Send size={13} />仅通过 WaoClient 与 WAO 通信</p>}
+      <button onClick={onHome} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-teal-800 px-4 py-3 font-semibold text-teal-800"><RotateCcw size={18} />回首页 / 换模板</button>
+      {capture.status === "pending_hitl" && <p className="mt-3 flex items-center justify-center gap-1 text-xs text-[#607272]"><Send size={13} />由 Capture BFF 本地整理，可选使用模型网关补充字段</p>}
     </main>
   );
 }
