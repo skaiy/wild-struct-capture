@@ -4,10 +4,14 @@ const ALLOWED_METHODS = new Set(["GET", "POST"]);
 
 async function forward(request: Request, { params }: { params: Promise<{ path: string[] }> }) {
   if (!ALLOWED_METHODS.has(request.method)) return NextResponse.json({ error: "不支持的方法" }, { status: 405 });
+  const path = (await params).path;
+  if (path[0] === "sessions" || path[0] === "captures") {
+    return NextResponse.json({ error: "拍录业务接口由 BFF 负责" }, { status: 404 });
+  }
   const baseUrl = process.env.WAO_BASE_URL;
   if (!baseUrl) return NextResponse.json({ error: "WAO 未配置，客户端将使用 DevStub" }, { status: 503 });
 
-  const target = new URL((await params).path.join("/"), `${baseUrl.replace(/\/$/, "")}/`);
+  const target = new URL(path.join("/"), `${baseUrl.replace(/\/$/, "")}/`);
   try {
     const response = await fetch(target, {
       method: request.method,

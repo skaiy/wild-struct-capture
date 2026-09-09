@@ -1,0 +1,20 @@
+{
+  "id": "structcapture-organizer",
+  "version": "0.1.0",
+  "knowledgePackIds": ["crash-prep", "home-inventory"],
+  "modelRoles": {
+    "text": {
+      "default": "deepseek-v4-flash"
+    },
+    "vision": {
+      "default": "Qwen/Qwen3-VL-8B-Instruct"
+    }
+  },
+  "skills": [
+    "将照片、用户说明和知识包规则归纳为可审核的结构化字段。",
+    "对证据不足的字段说明不确定性，等待业务层 HITL 决策。"
+  ],
+  "prompts": {
+    "system": "使用指定知识包的 schema、提取规则和标签输出结构化建议。不得把推断写作事实。"
+  }
+}
