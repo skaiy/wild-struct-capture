@@ -9,7 +9,7 @@ export async function POST(request: Request, { params }: Context) {
   if (!body || typeof body.reason !== "string" || !body.reason.trim()) {
     return NextResponse.json({ error: "退回原因不能为空" }, { status: 400 });
   }
-  const capture = updateHitl((await params).id, "rejected", body.reason.trim(), body.capture);
+  const capture = updateHitl((await params).id, "rejected", body.reason.trim(), body.capture, body.capture?.items);
   return capture
     ? NextResponse.json(capture)
     : NextResponse.json({ error: "整理结果不存在" }, { status: 404 });

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Check, Download, RotateCcw, Send, X } from "lucide-react";
-import type { OrganizedCapture } from "@/lib/types";
+import type { OrganizedCapture, Shot } from "@/lib/types";
 import type { WaoClient } from "@/lib/wao-client";
 
 function download(filename: string, content: string, type: string) {
@@ -39,6 +39,16 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
     }
   }
 
+  function setEnumValue(itemId: string, key: string, value: string) {
+    setCapture((current) => ({
+      ...current,
+      items: current.items.map((item) => item.id !== itemId ? item : {
+        ...item,
+        fields: item.fields.map((field) => field.key === key ? { ...field, value, confidence: "high" } : field),
+      }),
+    }));
+  }
+
   function exportJson() {
     if (!isApproved) return;
     download(`structcapture-${capture.id}.json`, JSON.stringify(capture, null, 2), "application/json");
@@ -47,7 +57,11 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
   function exportCsv() {
     if (!isApproved) return;
     const quote = (value: string) => `"${value.replaceAll("\"", "\"\"")}"`;
-    const rows = ["字段,值,置信度", ...capture.fields.map((field) => [field.label, field.value, field.confidence].map(quote).join(","))];
+    const rows = [
+      "项目,字段,值,置信度",
+      ...capture.metaFields.map((field) => ["会话", field.label, field.value, field.confidence].map(quote).join(",")),
+      ...capture.items.flatMap((item, index) => item.fields.map((field) => [`项目 ${index + 1}`, field.label, field.value, field.confidence].map(quote).join(","))),
+    ];
     download(`structcapture-${capture.id}.csv`, `\uFEFF${rows.join("\n")}`, "text/csv;charset=utf-8");
   }
 
@@ -58,9 +72,21 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
         <span className={`rounded-full px-3 py-1 text-sm font-semibold ${isApproved ? "bg-[#d7f1ee] text-teal-800" : "bg-amber-100 text-amber-800"}`}>{isApproved ? "已确认" : capture.status === "rejected" ? "已退回" : "待 HITL"}</span>
       </header>
       <section className="rounded-2xl border border-[#d9e6e3] bg-white p-5 shadow-sm">
-        <h2 className="font-bold">结构化字段</h2>
-        <p className="mt-1 text-sm text-[#607272]">请结合下方定向照片核对后再确认。</p>
-        <dl className="mt-3 divide-y divide-[#e6efed]">{capture.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></dt><dd className="mt-1 font-medium">{field.value}</dd></div>)}</dl>
+        <h2 className="font-bold">本次整理</h2>
+        <p className="mt-1 text-sm text-[#607272]">会话信息与摘要</p>
+        <dl className="mt-3 divide-y divide-[#e6efed]">{capture.metaFields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label}</dt><dd className="mt-1 font-medium">{field.value}</dd></div>)}</dl>
+      </section>
+      <section className="mt-6">
+        <div className="mb-3 flex items-baseline justify-between"><h2 className="font-bold">整理项目</h2><span className="text-sm text-[#607272]">{capture.items.length} 项</span></div>
+        <p className="mb-3 text-sm text-[#607272]">每件可辨识物品或实验对象独立成卡；枚举字段可在确认前逐项修正。</p>
+        <div className="space-y-4">{capture.items.map((item, itemIndex) => {
+          const linkedShots = item.galleryShotIds.map((id) => capture.gallery.find((shot) => shot.id === id)).filter((shot): shot is Shot => Boolean(shot));
+          return <article key={item.id} className="overflow-hidden rounded-2xl border border-[#d9e6e3] bg-white shadow-sm">
+            <div className="flex items-center justify-between bg-[#e7f5f2] px-5 py-3"><h3 className="font-bold text-teal-950">项目 {itemIndex + 1}</h3><span className="text-xs text-teal-800">{linkedShots.length ? `关联 ${linkedShots.length} 张照片` : "无关联照片"}</span></div>
+            <dl className="divide-y divide-[#e6efed] px-5">{item.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></dt><dd className="mt-1 font-medium">{field.options ? <select aria-label={`${itemIndex + 1} ${field.label}`} value={field.value} onChange={(event) => setEnumValue(item.id, field.key, event.target.value)} disabled={capture.status !== "pending_hitl"} className="w-full rounded-lg border border-[#c7d7d3] bg-white p-2 text-base outline-none focus:border-teal-700 disabled:cursor-not-allowed disabled:bg-[#f4f8f7]"><option value="待确认">待确认</option>{field.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : field.value}</dd></div>)}</dl>
+            {linkedShots.length > 0 && <div className="grid grid-cols-3 gap-2 border-t border-[#e6efed] p-3">{linkedShots.map((shot, index) => <div key={shot.id} className="overflow-hidden rounded-lg bg-[#d7f1ee]">{shot.imageUrl ? <img src={shot.imageUrl} alt={shot.caption || `项目 ${itemIndex + 1} 的关联照片 ${index + 1}`} className="aspect-square w-full object-cover" /> : <p className="aspect-square p-2 text-xs text-teal-900">{shot.caption || `照片 ${index + 1}`}</p>}</div>)}</div>}
+          </article>;
+        })}</div>
       </section>
       <section className="mt-6">
         <div className="mb-3 flex items-baseline justify-between"><h2 className="font-bold">定向照片</h2><span className="text-sm text-[#607272]">{capture.gallery.length} 条记录</span></div>

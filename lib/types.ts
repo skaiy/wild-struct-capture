@@ -28,6 +28,13 @@ export type StructuredField = {
   label: string;
   value: string;
   confidence: "high" | "medium" | "low";
+  options?: string[];
+};
+
+export type OrganizedItem = {
+  id: string;
+  fields: StructuredField[];
+  galleryShotIds: string[];
 };
 
 export type OrganizedCapture = {
@@ -35,7 +42,8 @@ export type OrganizedCapture = {
   sessionId: string;
   schemaId: SchemaId;
   status: "pending_hitl" | "approved" | "rejected";
-  fields: StructuredField[];
+  metaFields: StructuredField[];
+  items: OrganizedItem[];
   gallery: Shot[];
   createdAt: string;
   rejectionReason?: string;
