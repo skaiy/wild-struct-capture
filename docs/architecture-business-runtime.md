@@ -46,6 +46,14 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 5. BFF 保存整理结果，返回 `pending_hitl`。
 6. PWA 调用 BFF 的 approve/reject；BFF 更新权威 HITL 状态。仅 `approved` 可导出。
 
+## M5：可选模型网关增强
+
+`extract` 与 `organize` 先同步构建本地知识包字段。原版 WAO 0.6 的 `POST /api/v1/agents/:id/chat` 和 OpenAI 兼容 Agent 路径会在 `build_chat_context` 注入面向“新能源汽车故障诊断/维修 RAG”的系统提示词，故它们不是 StructCapture 可用的领域无关整理接口。BFF 不调用这些路径，也不以 WAO 健康状态决定业务可用性。
+
+当服务端同时配置 `STRUCTCAPTURE_LLM_BASE_URL` 与 `STRUCTCAPTURE_LLM_API_KEY` 时，BFF 会最佳努力向该 OpenAI 兼容网关的 `/v1/chat/completions` 发送 pack 的规则、标签、schema 和照片 caption/direction。该共享模型网关与 WAO 的 WildPool/new-api 使用方式同类，但不经过 WAO 的车修 RAG Agent；`STRUCTCAPTURE_LLM_MODEL` 默认 `deepseek-v4-flash`。POC 的 `imageUrl` 仅是引用，不能假定网关已下载或读取图片。
+
+模型的结构化回答只能替换摘要并补充当前 pack 中定义的键，不能改变 `schema`、`shot_count`、`pending_hitl` 或任何业务状态。未配置变量、网关拒绝、超时、非成功响应或无法解析的回答都返回 `null` 增强，BFF 继续保存本地结果。因此该调用既不要求 WAO 可用，也不引入 WAO `/sessions` 或 `/captures/*` 路由。知识包和 Agent 仍可作为可安装的版本化 WAO runtime 资产保留。
+
 ## 禁止实践
 
 - 不给 WAO core 添加拍录业务 API、会话表或 HITL 工作流。

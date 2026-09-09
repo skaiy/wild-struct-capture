@@ -2,11 +2,13 @@ import crashPrepPack from "@/docs/runtime-assets/crash-prep.knowledge-pack.json"
 import homeInventoryPack from "@/docs/runtime-assets/home-inventory.knowledge-pack.json";
 import type { CaptureSession, OrganizedCapture, SchemaId, Shot, StructuredField } from "@/lib/types";
 import { captureStore } from "@/lib/bff/capture-store";
+import { enrichWithModelGateway, type WaoEnrichment } from "@/lib/bff/wao-runtime";
 
-type KnowledgePack = {
+export type KnowledgePack = {
   id: string;
   labels: Record<string, string>;
   extractionRules: string[];
+  schema: { fields: Array<{ key: string }> };
 };
 
 const knowledgePacks: Record<SchemaId, KnowledgePack> = {
@@ -60,24 +62,49 @@ function buildFields(schemaId: SchemaId, shots: Shot[]): StructuredField[] {
   ];
 }
 
+function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichment: WaoEnrichment | null) {
+  if (!enrichment) return fields;
+  const pack = knowledgePacks[schemaId];
+  const output = fields.map((field) =>
+    field.key === "summary" && enrichment.summary
+      ? { ...field, value: enrichment.summary, confidence: "medium" as const }
+      : field,
+  );
+  for (const key of pack.schema.fields.map((field) => field.key)) {
+    const enriched = enrichment.fields[key];
+    if (!enriched) continue;
+    const field: StructuredField = {
+      key,
+      label: pack.labels[key] ?? key,
+      value: enriched.value,
+      confidence: enriched.confidence,
+    };
+    const existingIndex = output.findIndex((item) => item.key === key);
+    if (existingIndex >= 0) output[existingIndex] = field;
+    else output.push(field);
+  }
+  return output;
+}
+
 /**
  * The local path deliberately derives structured output from versioned runtime
- * asset data. A future generic WAO task/chat enrichment may be inserted here,
- * but this BFF never depends on WAO capture-specific APIs.
+ * asset data. Generic WAO enrichment is best-effort and never uses
+ * capture-specific WAO APIs.
  */
-export function extract(session: CaptureSession, shots: Shot[]): OrganizedCapture {
+export async function extract(session: CaptureSession, shots: Shot[]): Promise<OrganizedCapture> {
+  const enrichment = await enrichWithModelGateway(knowledgePacks[session.schemaId], shots);
   return captureStore.saveCapture({
     id: crypto.randomUUID(),
     sessionId: session.id,
     schemaId: session.schemaId,
     status: "pending_hitl",
-    fields: buildFields(session.schemaId, shots),
+    fields: mergeEnrichment(session.schemaId, buildFields(session.schemaId, shots), enrichment),
     gallery: shots,
     createdAt: new Date().toISOString(),
   });
 }
 
-export function organize(session: CaptureSession, shots: Shot[]) {
+export async function organize(session: CaptureSession, shots: Shot[]) {
   return extract(session, shots);
 }
 
