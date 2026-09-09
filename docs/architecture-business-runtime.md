@@ -56,7 +56,9 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 
 `extract` 与 `organize` 先同步构建本地知识包字段。配置 `WAO_BASE_URL` 后，BFF 优先读取原版 WAO Agent 目录，并以 `STRUCTCAPTURE_WAO_AGENT_ID`（默认名称为 `structcapture-organizer`）定位已安装的 StructCapture Agent。线上 Agent `e483332c-6b41-41cb-b1b5-1370b8438208` 绑定 home-inventory 与 crash-prep packs。
 
-实测/源码核对的 WAO 0.6 调用面只有 `POST /api/v1/agents/:id/chat`、`POST /api/v1/public/agents/:id/chat` 与 OpenAI 兼容的 `POST /v1/chat/completions`（`model=agentId`）。它们需要受控 bearer key，且共同的 `build_chat_context` 会注入“新能源汽车故障诊断与维修”系统提示词。因此它不是 pack-aware 的 StructCapture Agent invocation，BFF **不得调用**这些 EV-repair 路径，也不会虚构 PD/CA 或其他不存在的 API。
+实测线上 WAO 0.6 的可用调用面是 `POST /api/v1/agents/:id/chat`；它返回 `401 {"error":"verified isolation claims required for chat RAG"}`，直到请求带上经验证的 JWT。源码显示该 JWT 通过 `Authorization: Bearer <JWT>` 传入，必含 `sub`、`tenant_id`、`exp`，并可带 `project_id`（缺省为 `default`）和 `roles`。当前 organizer 的范围是 `tenant_id=structcapture`、`project_id=default`。`X-Identity` 和 JSON body 不是 verified claims 的来源。
+
+在生产模式，WAO 仅信任配置 issuer/audience/JWKS 的 OIDC JWT；将 HS256 的 `AGENTOS_JWT_SECRET` 复制到 Capture BFF 以自签 token 不安全，故本 PR 不铸造或转发伪造 claims。源码分支包含 OpenAI 兼容 endpoint，但线上 VPS 的 `/v1/chat/completions` 当前是 404，不能作为替代路径。更关键的是，现有 Agent chat 的 `build_chat_context` 会注入“新能源汽车故障诊断与维修”系统提示词。因此它不是 pack-aware 的 StructCapture Agent invocation，BFF **不得调用**该 EV-repair 路径，也不会虚构 PD/CA 或其他不存在的 API。
 
 Agent 目录读取、找不到 Agent 或该受限调用面都会无害地回退。服务端同时配置 `STRUCTCAPTURE_LLM_BASE_URL` 与 `STRUCTCAPTURE_LLM_API_KEY` 时，BFF 会最佳努力向该 OpenAI 兼容网关的 `/v1/chat/completions` 发送 pack 的规则、标签、schema 和照片 caption/direction。该共享模型网关不经过 WAO 的车修 RAG Agent；`STRUCTCAPTURE_LLM_MODEL` 默认 `deepseek-v4-flash`。POC 的 `imageUrl` 仅是引用，不能假定网关已下载或读取图片。两个远程增强都不能使用时，home-inventory 仅填充可从 caption/direction 直接识别的品牌、规格、有效期、位置、数量和品类，其余字段为“待确认”，不转储整段说明。
 

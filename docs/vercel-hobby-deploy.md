@@ -27,7 +27,13 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 
 `STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时默认 `15000` 毫秒，最大可设为 `60000` 毫秒。Vercel 经由远程模型网关或 VPS 时，建议使用 `30000`–`60000`，以降低因网络延迟而回退到本地占位字段的概率；本地模型池通常可保持较短超时。
 
-`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询只读 Agent 目录；在 WAO 0.6 提供 pack-aware 的通用 Agent invoke 前，BFF 不会把拍录内容发送给其 EV-repair chat/completions 路径，随后改用 `STRUCTCAPTURE_LLM_*` 网关。
+`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询只读 Agent 目录，并校验其 `structcapture/default` 隔离范围；在 WAO 0.6 提供 pack-aware 的通用 Agent invoke 前，BFF 不会把拍录内容发送给其 EV-repair chat 路径，随后改用 `STRUCTCAPTURE_LLM_*` 网关。
+
+### WAO Agent chat 的后续接入条件
+
+原版 WAO 的 `POST /api/v1/agents/{id}/chat` 只接受 `Authorization: Bearer <JWT>`。JWT 必须由 WAO 信任的认证边界验证，并包含 `sub`、`tenant_id=structcapture`、`project_id=default` 与未过期的 `exp`；`roles` 可选。请求体中的 tenant/project 字段和 `X-Identity` 都不能生成 verified isolation claims。
+
+本项目不能安全地从 Capture BFF 铸造该 JWT：在 HS256 模式复制 `AGENTOS_JWT_SECRET` 到 Vercel 会让 BFF 获得 WAO 的签名根密钥。后续应将 WAO 配置为 OIDC，并由受信身份提供商向 BFF 工作负载签发短期、受众受限的服务 JWT。即使完成该接入，WAO 还必须提供不注入新能源汽车维修提示词的 pack-aware Agent invoke；否则仍不可发送家庭盘点内容。线上 VPS 当前 `/v1/chat/completions` 为 404，不应作为替代路径。
 
 当前演示端点的健康检查：
 

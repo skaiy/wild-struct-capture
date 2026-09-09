@@ -34,6 +34,14 @@ function isAgentId(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
+type WaoAgent = {
+  id?: string;
+  name?: string;
+  business_domain?: string;
+  tenant_id?: string;
+  project_id?: string;
+};
+
 /**
  * WAO 0.6 lists the configured StructCapture Agent, but its public Agent chat
  * and OpenAI-compatible completion handlers hard-code the EV-repair RAG prompt.
@@ -49,29 +57,31 @@ export async function enrichWithWaoAgent(
   const configuredAgent = process.env.STRUCTCAPTURE_WAO_AGENT_ID?.trim() || "structcapture-organizer";
   if (!baseUrl || !configuredAgent || !pack.id || !shots.length) return null;
 
-  // An explicit UUID is enough to identify the intended runtime asset. A name
-  // is resolved from the read-only Agent catalog to retain the documented
-  // name-based configuration option without sending capture data to WAO.
-  if (!isAgentId(configuredAgent)) {
-    try {
-      const response = await fetch(`${baseUrl}/api/v1/agents`, {
-        cache: "no-store",
-        signal: AbortSignal.timeout(requestTimeout()),
-      });
-      const payload = await response.json() as { agents?: Array<{ id?: string; name?: string }> };
-      const agent = payload.agents?.find(({ name }) => name === configuredAgent);
-      if (!agent?.id) {
-        console.warn("WAO StructCapture Agent was not found", { configuredAgent });
-        return null;
-      }
-    } catch {
-      console.warn("WAO Agent catalog is unavailable; using model gateway fallback");
+  // Resolve from the read-only catalog even for a configured UUID. This checks
+  // the configured asset and its required claims scope without sending capture
+  // content to an incompatible WAO 0.6 chat endpoint.
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/agents`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(requestTimeout()),
+    });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    const payload = await response.json() as { agents?: WaoAgent[] };
+    const agent = payload.agents?.find(({ id, name }) =>
+      isAgentId(configuredAgent) ? id === configuredAgent : name === configuredAgent,
+    );
+    if (!agent?.id || agent.business_domain !== "structcapture" ||
+      agent.tenant_id !== "structcapture" || agent.project_id !== "default") {
+      console.warn("WAO StructCapture Agent is missing or has an unexpected scope", { configuredAgent });
       return null;
     }
+  } catch {
+    console.warn("WAO Agent catalog is unavailable; using model gateway fallback");
+    return null;
   }
 
   console.warn(
-    "WAO 0.6 Agent invocation is not used: its available chat/completions surfaces are EV-repair-specific",
+    "WAO 0.6 Agent invocation is not used: it requires a trusted JWT and its available chat surface is EV-repair-specific",
     { pack: pack.id },
   );
   return null;
