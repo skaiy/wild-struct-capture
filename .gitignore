@@ -1,6 +1,11 @@
-node_modules
+# Dependencies (at any workspace depth)
+node_modules/
+**/node_modules/
 .next
+# Local environment values and deployment metadata
 .env.local
+.env.*.local
+.vercel/
 *.tsbuildinfo
 AGENTS.md
 CLAUDE.md
