@@ -271,11 +271,33 @@ export function CaptureApp() {
           <div className="flex items-center gap-2 text-sm text-teal-100"><Sparkles size={16} /> 2. 记录信息</div>
           <p className="mt-1 font-semibold">{direction || "补充这张照片说明的内容"}</p>
         </div>
-        <div className="flex items-center justify-between gap-3">
-          <label className="mt-4 text-sm font-semibold" htmlFor="shot-caption">这条记录说明什么？</label>
-          <button type="button" onClick={toggleTranscription} aria-pressed={isRecording} className="flex shrink-0 items-center gap-1 rounded-lg border border-teal-800 px-2 py-1 text-xs font-semibold text-teal-800 disabled:cursor-not-allowed disabled:opacity-60"><Mic size={15} />{isRecording ? "停止录音" : "录音转文字"}</button>
-        </div>
+        <label className="mt-4 block text-sm font-semibold" htmlFor="shot-caption">这条记录说明什么？</label>
         <textarea id="shot-caption" value={caption} onChange={(event) => setCaption(event.target.value)} placeholder="例如：左侧缓冲区已放置警示锥…" className="mt-2 min-h-24 w-full resize-none rounded-xl border border-[#c7d7d3] p-3 outline-none focus:border-teal-700" />
+        <button
+          type="button"
+          onClick={toggleTranscription}
+          aria-pressed={isRecording}
+          aria-describedby="speech-input-hint"
+          className={`mt-3 flex w-full items-center justify-center gap-3 rounded-xl border px-4 py-3.5 font-semibold transition focus:outline-none focus:ring-2 focus:ring-teal-700 focus:ring-offset-2 ${
+            isRecording
+              ? "border-[#0f766e] bg-[#0f766e] text-white shadow-sm"
+              : "border-teal-800 bg-[#e7f5f2] text-teal-900 hover:bg-[#d7f1ee]"
+          }`}
+        >
+          <Mic size={20} aria-hidden="true" />
+          <span>{isRecording ? "正在录音 · 点击停止" : "语音输入 · 录音转文字"}</span>
+          {isRecording && (
+            <span className="speech-waveform" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+              <span />
+            </span>
+          )}
+        </button>
+        <p id="speech-input-hint" className={`mt-2 text-sm ${isRecording ? "font-medium text-teal-800" : "text-[#607272]"}`}>
+          {isRecording ? "正在聆听你的语音，点击按钮即可结束并转写。" : "点击后开始说话，识别内容会自动追加到上方说明。"}
+        </p>
         {transcriptionMessage && <p role="status" className="mt-2 text-sm text-[#607272]">{transcriptionMessage}</p>}
         <label className="mt-4 block text-sm font-semibold">拍摄指引（可修改）</label>
         <input value={direction} onChange={(event) => setDirection(event.target.value)} className="mt-2 w-full rounded-xl border border-[#c7d7d3] p-3 outline-none focus:border-teal-700" />
