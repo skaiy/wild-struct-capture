@@ -113,13 +113,15 @@ function itemsFromEnrichment(schemaId: SchemaId, shots: Shot[], enrichment: WaoE
     return itemsFromFlatFields(schemaId, shots, enrichment?.fields ?? {});
   }
   const pack = knowledgePacks[schemaId];
-  return enrichment.items.map((item) => ({
+  return enrichment.items.map((item, index) => ({
     id: crypto.randomUUID(),
     fields: pack.schema.fields.map((field) => {
       const source = item.fields[field.key];
       return structuredField(pack, field.key, source?.value, source?.confidence ?? "low");
     }),
-    galleryShotIds: item.galleryShotIds.filter((id) => shots.some((shot) => shot.id === id)),
+    galleryShotIds: item.galleryShotIds.filter((id) => shots.some((shot) => shot.id === id)).length
+      ? item.galleryShotIds.filter((id) => shots.some((shot) => shot.id === id))
+      : shots[index] ? [shots[index].id] : [],
   }));
 }
 
