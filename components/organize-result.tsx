@@ -22,7 +22,7 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
 
   async function approve() {
     try {
-      setCapture(await wao.approve(capture.id));
+      setCapture(await wao.approve(capture));
       setMessage("已确认。该整理结果现在可以导出。");
     } catch {
       setMessage("确认失败，请稍后重试。");
@@ -32,7 +32,7 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
   async function reject() {
     if (!reason.trim()) return setMessage("请填写退回原因，方便重新整理。");
     try {
-      setCapture(await wao.reject(capture.id, reason.trim()));
+      setCapture(await wao.reject(capture, reason.trim()));
       setMessage("已退回；结果不会提交或导出。");
     } catch {
       setMessage("退回失败，请稍后重试。");

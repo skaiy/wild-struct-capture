@@ -129,8 +129,14 @@ export async function organize(session: CaptureSession, shots: Shot[]) {
   return extract(session, shots);
 }
 
-export function updateHitl(captureId: string, status: "approved" | "rejected", reason?: string) {
-  const capture = captureStore.getCapture(captureId);
+export function updateHitl(
+  captureId: string,
+  status: "approved" | "rejected",
+  reason?: string,
+  fallbackCapture?: OrganizedCapture,
+) {
+  const capture = captureStore.getCapture(captureId) ??
+    (fallbackCapture?.id === captureId ? fallbackCapture : undefined);
   if (!capture) return undefined;
   return captureStore.saveCapture({
     ...capture,
