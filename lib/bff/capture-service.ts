@@ -4,7 +4,7 @@ import type { CaptureSession, OrganizedCapture, SchemaId, Shot, StructuredField 
 import { captureStore } from "@/lib/bff/capture-store";
 
 type KnowledgePack = {
-  id: SchemaId;
+  id: string;
   labels: Record<string, string>;
   extractionRules: string[];
 };
