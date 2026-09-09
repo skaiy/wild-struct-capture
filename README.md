@@ -1,6 +1,6 @@
 # Wild StructCapture
 
-中文优先的结构化拍录 PWA：选择模板、用「照片 + 自然语言说明」记录现场，并将会话交给 Wild AgentOS（WAO）后续整理。
+中文优先的结构化拍录 PWA：选择模板、用「照片 + 自然语言说明」记录现场，并由本应用的 Capture BFF 整理和人工确认。
 
 ## 快速开始 / Quick start
 
@@ -16,18 +16,18 @@ npm run dev
 
 - 两个模板：**碰撞实验准备**、**家庭物品盘点**。
 - 会话、照片说明和拍摄指引先保存在浏览器本地存储，离线仍可继续记录。
-- `POST /api/sessions`、`POST /api/sessions/:id/shots`、`GET /api/sessions/:id/shots` 供本地开发使用；内存存储不应视为生产数据库。
-- 「完成并提交整理」只通过 `WaoClient` 对接 WAO。客户端**不会直接调用 VL**；整理结果必须由人工确认后才能导出 JSON 或 CSV。
+- `/api/wao` 下的 Capture BFF 拥有会话、照片、整理结果和 HITL 状态；内存存储只适用于 POC，生产环境须替换为数据库。
+- 「完成并提交整理」只通过同源 `WaoClient` 调用 BFF。客户端**不会直接调用 VL/WildPool/WAO**；整理结果必须由人工确认后才能导出 JSON 或 CSV。
 
 ## 架构 / Architecture
 
 ```text
-PWA shell → WaoClient → /api/wao gateway → HTTP WAO (optional) → Wild AgentOS / HITL
-       └→ DevStub fallback (WAO absent/unavailable)
+PWA shell → WaoClient → /api/wao Capture BFF → WAO generic runtime (optional) → model pool
+       └→ DevStub fallback (BFF unavailable)
        └→ LocalStorageProvider (device-side capture resilience)
 ```
 
-`WAO_BASE_URL` 配置仅服务端可见的 WAO HTTP 端点。演示目标为 `http://198.12.81.152:8088`；浏览器只调用同源 `/api/wao` 网关，端点不可用或未配置时，`WaoClient` 自动回退到 `DevStub`，所以无需云数据库即可试用拍录流程。通过 `curl --fail http://198.12.81.152:8088/health` 检查演示端点；完整的 Vercel 变量设置和可选 Caddy `/wao` 反代见 [部署指南](docs/vercel-hobby-deploy.md)。
+`WAO_BASE_URL` 是仅服务端可见的原版 WAO 运行时端点。浏览器只调用同源 `/api/wao` BFF；BFF 保有拍录业务 I/O，WAO 只可选地提供通用运行时能力。未配置或不可用时，`WaoClient` 自动回退到 `DevStub`，所以无需云数据库即可试用拍录流程。完整边界和运行时资产规则见[业务层与运行时架构](docs/architecture-business-runtime.md)；完整的 Vercel 变量设置和可选 Caddy `/wao` 反代见 [部署指南](docs/vercel-hobby-deploy.md)。
 
 部署采用免费的 **Vercel Hobby** 托管该 Next.js PWA；WAO 服务可部署在 VPS 的 `:8088`。跨域部署时，VPS 必须只允许预期的 Vercel 来源并启用 HTTPS；不要把密钥或生产地址提交进仓库。仓库只提供 `.env.example`。
 
