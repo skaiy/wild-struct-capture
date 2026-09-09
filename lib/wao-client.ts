@@ -11,6 +11,8 @@ export interface WaoClient {
 }
 
 const newId = () => crypto.randomUUID();
+const REQUEST_TIMEOUT_MS = 15_000;
+const ORGANIZE_REQUEST_TIMEOUT_MS = 35_000;
 
 export class DevStubWaoClient implements WaoClient {
   private sessions = new Map<string, CaptureSession>();
@@ -72,10 +74,11 @@ export class DevStubWaoClient implements WaoClient {
 export class HttpWaoClient implements WaoClient {
   constructor(private readonly baseUrl: string) {}
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}${path}`, {
       ...init,
       headers: { "content-type": "application/json", ...init?.headers },
+      signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) throw new Error(`WAO 请求失败 (${response.status})`);
     return response.json() as Promise<T>;
@@ -98,7 +101,11 @@ export class HttpWaoClient implements WaoClient {
   }
 
   organize(session: CaptureSession, shots: Shot[]) {
-    return this.request<OrganizedCapture>("/captures/organize", { method: "POST", body: JSON.stringify({ session, shots }) });
+    return this.request<OrganizedCapture>(
+      "/captures/organize",
+      { method: "POST", body: JSON.stringify({ session, shots }) },
+      ORGANIZE_REQUEST_TIMEOUT_MS,
+    );
   }
 
   approve(capture: OrganizedCapture) {

@@ -14,9 +14,12 @@ export type WaoEnrichment = {
 
 function requestTimeout() {
   const parsed = Number(process.env.STRUCTCAPTURE_LLM_TIMEOUT_MS);
-  // Keep the local default responsive, while allowing slower remote model gateways
-  // up to one minute. Calls remain best-effort and fall back to placeholder fields.
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 60_000) : 15_000;
+  // Long Chinese multi-item transcripts need more than the old 8–10 second
+  // window. Keep this bounded for the BFF while allowing the env to tune the
+  // budget within a range proven practical for the shared model gateways.
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(Math.max(parsed, 20_000), 30_000)
+    : 25_000;
 }
 
 function waoBaseUrl() {
@@ -105,17 +108,16 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
     shot: index + 1,
     caption,
     direction,
-    imageUrl,
+    hasImage: Boolean(imageUrl),
   }));
   return [
-    "仅根据给出的照片说明、方向和可见证据提出待人工审核的建议；不得把推断写成事实。",
-    `知识包：${pack.id}`,
-    `字段标签：${JSON.stringify(pack.labels)}`,
-    `提取规则：${pack.extractionRules.join("；")}`,
-    `允许字段：summary、${pack.schema.fields.map((field) => field.key).join("、")}`,
-    "以 JSON 对象返回，不要 Markdown：",
+    "从证据提取知识包字段，输出可供人工确认的 JSON；不得推断。",
+    `知识包=${pack.id}；字段标签=${JSON.stringify(pack.labels)}；规则=${pack.extractionRules.join("；")}`,
+    `仅允许 summary、${pack.schema.fields.map((field) => field.key).join("、")}；每个字段必须有 fields 条目，未知写“待确认”。`,
+    "字段值不可复制完整转录或 summary。多物品按相同顺序用“；”列出，例如名称“凡士林；儿童退烧药”，数量“凡士林 × 3；儿童退烧药 × 4”。",
+    "只返回 JSON，不要 Markdown：",
     '{"summary":"string","fields":{"field_key":{"value":"string","confidence":"high|medium"}}}',
-    `照片证据（imageUrl 仅作 POC 引用，不要求读取）：${JSON.stringify(evidence)}`,
+    `文字证据：${JSON.stringify(evidence)}`,
   ].join("\n");
 }
 
@@ -124,9 +126,11 @@ function textFromResponse(payload: unknown): string | null {
   if (!payload || typeof payload !== "object") return null;
   const record = payload as Record<string, unknown>;
   if ("summary" in record || "fields" in record) return JSON.stringify(record);
-  for (const key of ["content", "message", "response", "output", "text"]) {
+  // Some reasoning-model gateways leave content blank and place their final JSON
+  // in reasoning_content. Prefer normal content, using reasoning only as a fallback.
+  for (const key of ["content", "message", "response", "output", "text", "reasoning_content"]) {
     const value = record[key];
-    if (typeof value === "string") return value;
+    if (typeof value === "string" && value.trim()) return value;
     if (value && typeof value === "object") {
       const nested = textFromResponse(value);
       if (nested) return nested;
@@ -136,10 +140,10 @@ function textFromResponse(payload: unknown): string | null {
   return textFromResponse(choice);
 }
 
-function parseEnrichment(payload: unknown, pack: KnowledgePack): WaoEnrichment | null {
+function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): WaoEnrichment | null {
   const text = textFromResponse(payload);
   if (!text) return null;
-  const json = text.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? text;
+  const json = text.match(/```(?:json|python|javascript|js|typescript|ts)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? text.trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -157,11 +161,24 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack): WaoEnrichment |
       const raw: Record<string, unknown> =
         typeof rawField === "object" && rawField ? rawField as Record<string, unknown> : { value: rawField };
       const value = typeof raw.value === "string" ? raw.value.trim() : "";
-      if (value) fields[key] = { value, confidence: raw.confidence === "high" ? "high" : "medium" };
+      if (value && !isTranscriptDump(value, shots)) {
+        fields[key] = { value, confidence: raw.confidence === "high" ? "high" : "medium" };
+      }
     }
   }
   const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined;
   return summary || Object.keys(fields).length ? { summary, fields } : null;
+}
+
+function isTranscriptDump(value: string, shots: Shot[]) {
+  const normalizedValue = value.replace(/\s+/g, "");
+  const sourceTexts = shots
+    .flatMap((shot) => [shot.caption, shot.direction])
+    .filter(Boolean)
+    .map((text) => text.replace(/\s+/g, ""));
+  // Reject a model response that copies one entire long observation into a
+  // structured field. The original observation remains available in summary.
+  return normalizedValue.length > 40 && sourceTexts.includes(normalizedValue);
 }
 
 /**
@@ -174,6 +191,14 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
   const apiKey = process.env.STRUCTCAPTURE_LLM_API_KEY?.trim();
   if (!endpoint || !apiKey) return null;
 
+  const includeImages = process.env.STRUCTCAPTURE_LLM_INCLUDE_IMAGES === "true";
+  const imageParts = includeImages
+    ? shots.flatMap((shot) => shot.imageUrl
+      ? [{ type: "image_url", image_url: { url: shot.imageUrl } }]
+      : [])
+    : [];
+  const prompt = buildPrompt(pack, shots);
+
   try {
     const response = await fetch(endpoint, {
       method: "POST",
@@ -181,10 +206,11 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
       body: JSON.stringify({
         model: process.env.STRUCTCAPTURE_LLM_MODEL?.trim() || "deepseek-v4-flash",
         messages: [
-          { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON。" },
-          { role: "user", content: buildPrompt(pack, shots) },
+          { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON，且严格遵守用户给出的知识包 schema。" },
+          { role: "user", content: includeImages ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
         ],
         temperature: 0.1,
+        max_tokens: 1_200,
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(requestTimeout()),
@@ -193,7 +219,7 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
       console.warn("LLM enrichment request failed", { status: response.status });
       return null;
     }
-    return parseEnrichment(await response.json(), pack);
+    return parseEnrichment(await response.json(), pack, shots);
   } catch (error) {
     const reason = error instanceof DOMException && error.name === "TimeoutError"
       ? "timeout"

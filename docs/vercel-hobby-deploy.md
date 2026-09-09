@@ -24,8 +24,9 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 | `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
 | `STRUCTCAPTURE_LLM_MODEL` | 模型名（可选） | 测试模型名（可选） | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_TIMEOUT_MS` | 超时毫秒（可选） | 测试值（可选） | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_LLM_INCLUDE_IMAGES` | 仅在网关支持远程图片 URL 时设为 `true` | 通常保持 `false` | 本地 `.env.local` 可选 | 否 |
 
-`STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时默认 `15000` 毫秒，最大可设为 `60000` 毫秒。Vercel 经由远程模型网关或 VPS 时，建议使用 `30000`–`60000`，以降低因网络延迟而回退到本地占位字段的概率；本地模型池通常可保持较短超时。
+`STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时服务端默认 `25000` 毫秒，限制在 `20000`–`30000` 毫秒；浏览器的整理请求等待窗口更长。该范围兼顾 MiniMax 等远程模型网关的响应时间和 Vercel 函数的可用性。`STRUCTCAPTURE_LLM_INCLUDE_IMAGES` 默认关闭，保持 MiniMax 兼容的文本请求；仅在网关明确支持 `image_url` 内容块且图片地址可访问时开启。
 
 `WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询只读 Agent 目录，并校验其 `structcapture/default` 隔离范围；在 WAO 0.6 提供 pack-aware 的通用 Agent invoke 前，BFF 不会把拍录内容发送给其 EV-repair chat 路径，随后改用 `STRUCTCAPTURE_LLM_*` 网关。
 
