@@ -80,18 +80,14 @@ export class DevStubWaoClient implements WaoClient {
   }
 
   async approve(fallbackCapture: OrganizedCapture) {
-    const capture = this.captures.get(fallbackCapture.id) ?? fallbackCapture;
-    if (!capture) throw new Error("整理结果不存在");
-    const approved = { ...capture, status: "approved" as const };
-    this.captures.set(capture.id, approved);
+    const approved = { ...fallbackCapture, status: "approved" as const };
+    this.captures.set(fallbackCapture.id, approved);
     return approved;
   }
 
   async reject(fallbackCapture: OrganizedCapture, reason: string) {
-    const capture = this.captures.get(fallbackCapture.id) ?? fallbackCapture;
-    if (!capture) throw new Error("整理结果不存在");
-    const rejected = { ...capture, status: "rejected" as const, rejectionReason: reason };
-    this.captures.set(capture.id, rejected);
+    const rejected = { ...fallbackCapture, status: "rejected" as const, rejectionReason: reason };
+    this.captures.set(fallbackCapture.id, rejected);
     return rejected;
   }
 }

@@ -2,8 +2,35 @@
 
 import { useState } from "react";
 import { Check, Download, RotateCcw, Send, X } from "lucide-react";
-import type { OrganizedCapture, Shot } from "@/lib/types";
+import type { OrganizedCapture, Shot, StructuredField } from "@/lib/types";
 import type { WaoClient } from "@/lib/wao-client";
+
+const LONG_FIELD_KEYS = new Set([
+  "summary",
+  "owner_note",
+  "evidence_notes",
+  "safety_equipment",
+  "vehicle_condition",
+]);
+
+const MEDIUM_FIELD_KEYS = new Set([
+  "item_name",
+  "brand",
+  "location",
+  "category",
+  "specification",
+  "expiry_date",
+]);
+
+function fieldLayout(field: StructuredField) {
+  if (isLongField(field)) return "col-span-full";
+  if (MEDIUM_FIELD_KEYS.has(field.key) || field.value.length > 28) return "col-span-full sm:col-span-2";
+  return "col-span-1";
+}
+
+function isLongField(field: StructuredField) {
+  return LONG_FIELD_KEYS.has(field.key) || field.value.length > 80 || (field.key === "scene_location" && field.value.length > 28);
+}
 
 function download(filename: string, content: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
@@ -39,7 +66,7 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
     }
   }
 
-  function setEnumValue(itemId: string, key: string, value: string) {
+  function setItemFieldValue(itemId: string, key: string, value: string) {
     setCapture((current) => ({
       ...current,
       items: current.items.map((item) => item.id !== itemId ? item : {
@@ -47,6 +74,29 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
         fields: item.fields.map((field) => field.key === key ? { ...field, value, confidence: "high" } : field),
       }),
     }));
+  }
+
+  function setMetaFieldValue(key: string, value: string) {
+    setCapture((current) => ({
+      ...current,
+      metaFields: current.metaFields.map((field) => field.key === key ? { ...field, value, confidence: "high" } : field),
+    }));
+  }
+
+  function renderFieldControl(field: StructuredField, label: string, setValue: (value: string) => void) {
+    const disabled = capture.status !== "pending_hitl";
+    const controlClassName = "w-full rounded-lg border border-[#c7d7d3] bg-white p-2 text-base outline-none focus:border-teal-700 disabled:cursor-not-allowed disabled:bg-[#f4f8f7]";
+
+    if (field.options) {
+      return <select aria-label={label} value={field.value} onChange={(event) => setValue(event.target.value)} disabled={disabled} className={controlClassName}>
+        <option value="待确认">待确认</option>
+        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>;
+    }
+
+    return isLongField(field)
+      ? <textarea aria-label={label} value={field.value} onChange={(event) => setValue(event.target.value)} disabled={disabled} rows={3} className={`${controlClassName} resize-y`} />
+      : <input aria-label={label} value={field.value} onChange={(event) => setValue(event.target.value)} disabled={disabled} className={controlClassName} />;
   }
 
   function exportJson() {
@@ -74,16 +124,16 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
       <section className="rounded-2xl border border-[#d9e6e3] bg-white p-5 shadow-sm">
         <h2 className="font-bold">本次整理</h2>
         <p className="mt-1 text-sm text-[#607272]">会话信息与摘要</p>
-        <dl className="mt-3 divide-y divide-[#e6efed]">{capture.metaFields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label}</dt><dd className="mt-1 font-medium">{field.value}</dd></div>)}</dl>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">{capture.metaFields.map((field) => <label key={field.key} className={fieldLayout(field)}><span className="mb-1 block text-sm text-[#607272]">{field.label}</span>{renderFieldControl(field, field.label, (value) => setMetaFieldValue(field.key, value))}</label>)}</div>
       </section>
       <section className="mt-6">
         <div className="mb-3 flex items-baseline justify-between"><h2 className="font-bold">整理项目</h2><span className="text-sm text-[#607272]">{capture.items.length} 项</span></div>
-        <p className="mb-3 text-sm text-[#607272]">每件可辨识物品或实验对象独立成卡；枚举字段可在确认前逐项修正。</p>
+        <p className="mb-3 text-sm text-[#607272]">每件可辨识物品或实验对象独立成卡；确认前可逐项修正全部字段。</p>
         <div className="space-y-4">{capture.items.map((item, itemIndex) => {
           const linkedShots = item.galleryShotIds.map((id) => capture.gallery.find((shot) => shot.id === id)).filter((shot): shot is Shot => Boolean(shot));
           return <article key={item.id} className="overflow-hidden rounded-2xl border border-[#d9e6e3] bg-white shadow-sm">
             <div className="flex items-center justify-between bg-[#e7f5f2] px-5 py-3"><h3 className="font-bold text-teal-950">项目 {itemIndex + 1}</h3><span className="text-xs text-teal-800">{linkedShots.length ? `关联 ${linkedShots.length} 张照片` : "无关联照片"}</span></div>
-            <dl className="divide-y divide-[#e6efed] px-5">{item.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></dt><dd className="mt-1 font-medium">{field.options ? <select aria-label={`${itemIndex + 1} ${field.label}`} value={field.value} onChange={(event) => setEnumValue(item.id, field.key, event.target.value)} disabled={capture.status !== "pending_hitl"} className="w-full rounded-lg border border-[#c7d7d3] bg-white p-2 text-base outline-none focus:border-teal-700 disabled:cursor-not-allowed disabled:bg-[#f4f8f7]"><option value="待确认">待确认</option>{field.options.map((option) => <option key={option} value={option}>{option}</option>)}</select> : field.value}</dd></div>)}</dl>
+            <div className="grid grid-cols-2 gap-3 px-5 py-4 sm:grid-cols-3">{item.fields.map((field) => <label key={field.key} className={fieldLayout(field)}><span className="mb-1 block text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></span>{renderFieldControl(field, `${itemIndex + 1} ${field.label}`, (value) => setItemFieldValue(item.id, field.key, value))}</label>)}</div>
             {linkedShots.length > 0 && <div className="grid grid-cols-3 gap-2 border-t border-[#e6efed] p-3">{linkedShots.map((shot, index) => <div key={shot.id} className="overflow-hidden rounded-lg bg-[#d7f1ee]">{shot.imageUrl ? <img src={shot.imageUrl} alt={shot.caption || `项目 ${itemIndex + 1} 的关联照片 ${index + 1}`} className="aspect-square w-full object-cover" /> : <p className="aspect-square p-2 text-xs text-teal-900">{shot.caption || `照片 ${index + 1}`}</p>}</div>)}</div>}
           </article>;
         })}</div>

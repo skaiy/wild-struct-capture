@@ -336,14 +336,18 @@ export function updateHitl(
   status: "approved" | "rejected",
   reason?: string,
   fallbackCapture?: OrganizedCapture,
-  items?: OrganizedItem[],
 ) {
   const capture = captureStore.getCapture(captureId) ??
     (fallbackCapture?.id === captureId ? fallbackCapture : undefined);
   if (!capture) return undefined;
   return captureStore.saveCapture({
     ...capture,
-    ...(items ? { items: normalizeHitlItems(capture.schemaId, items, capture.gallery) } : {}),
+    ...(fallbackCapture?.id === captureId
+      ? {
+        metaFields: fallbackCapture.metaFields,
+        items: normalizeHitlItems(capture.schemaId, fallbackCapture.items, capture.gallery),
+      }
+      : {}),
     status,
     ...(status === "rejected" ? { rejectionReason: reason } : {}),
   });
