@@ -17,17 +17,17 @@ npm run dev
 - 两个模板：**碰撞实验准备**、**家庭物品盘点**。
 - 会话、照片说明和拍摄指引先保存在浏览器本地存储，离线仍可继续记录。
 - `POST /api/sessions`、`POST /api/sessions/:id/shots`、`GET /api/sessions/:id/shots` 供本地开发使用；内存存储不应视为生产数据库。
-- 「完成并提交整理」只通过 `WaoClient` 对接 WAO。客户端**不会直接调用 VL**；完整 HITL/导出流程属于后续 M2。
+- 「完成并提交整理」只通过 `WaoClient` 对接 WAO。客户端**不会直接调用 VL**；整理结果必须由人工确认后才能导出 JSON 或 CSV。
 
 ## 架构 / Architecture
 
 ```text
-PWA shell → WaoClient → HTTP WAO (optional) → Wild AgentOS / HITL
-       └→ DevStub fallback
+PWA shell → WaoClient → /api/wao gateway → HTTP WAO (optional) → Wild AgentOS / HITL
+       └→ DevStub fallback (WAO absent/unavailable)
        └→ LocalStorageProvider (device-side capture resilience)
 ```
 
-`NEXT_PUBLIC_WAO_BASE_URL` 配置 WAO HTTP 端点。演示目标为 `http://198.12.81.152:8088`；端点不可用或未配置时，`WaoClient` 自动回退到 `DevStub`，所以无需云数据库即可试用拍录流程。
+`WAO_BASE_URL` 配置仅服务端可见的 WAO HTTP 端点。演示目标为 `http://198.12.81.152:8088`；浏览器只调用同源 `/api/wao` 网关，端点不可用或未配置时，`WaoClient` 自动回退到 `DevStub`，所以无需云数据库即可试用拍录流程。
 
 部署采用免费的 **Vercel Hobby** 托管该 Next.js PWA；WAO 服务可部署在 VPS 的 `:8088`。跨域部署时，VPS 必须只允许预期的 Vercel 来源并启用 HTTPS；不要把密钥或生产地址提交进仓库。仓库只提供 `.env.example`。
 
