@@ -20,6 +20,13 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 | --- | --- | --- | --- | --- |
 | `WAO_BASE_URL` | `http://198.12.81.152:8088` 或 HTTPS 反代地址 | 使用测试 WAO，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
 | `STRUCTCAPTURE_WAO_AGENT_ID` | `e483332c-6b41-41cb-b1b5-1370b8438208`（可选） | 测试 Agent UUID，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_OIDC_TOKEN_URL` | IdP 的 HTTPS OAuth token endpoint | 对应测试 IdP，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_OIDC_CLIENT_ID` | workload OAuth client ID | 测试 client ID，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET` | workload OAuth client secret | 测试 secret，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
+| `STRUCTCAPTURE_WAO_OIDC_ISSUER` | 与 WAO 完全相同的 OIDC issuer | 测试 issuer，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_OIDC_AUDIENCE` | 与 WAO 完全相同的 OIDC audience | 测试 audience，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_OIDC_SCOPE` | IdP 可选的 client-credentials scope | 测试 scope，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_INCLUDE_IMAGES` | `true` 仅在 WAO vision model 可访问图片 URL 时 | 通常 `false` | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址 | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
 | `STRUCTCAPTURE_LLM_MODEL` | 模型名（可选） | 测试模型名（可选） | 本地 `.env.local` 可选 | 否 |
@@ -28,13 +35,16 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 
 `STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时服务端默认 `25000` 毫秒，限制在 `20000`–`30000` 毫秒；浏览器的整理请求等待窗口更长。该范围兼顾 MiniMax 等远程模型网关的响应时间和 Vercel 函数的可用性。`STRUCTCAPTURE_LLM_INCLUDE_IMAGES` 默认关闭，保持 MiniMax 兼容的文本请求；仅在网关明确支持 `image_url` 内容块且图片地址可访问时开启。
 
-`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询只读 Agent 目录，并校验其 `structcapture/default` 隔离范围；在 WAO 0.6 提供 pack-aware 的通用 Agent invoke 前，BFF 不会把拍录内容发送给其 EV-repair chat 路径，随后改用 `STRUCTCAPTURE_LLM_*` 网关。
+`WAO_BASE_URL` 只由服务端读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询 Agent 目录，并校验其 `structcapture/default` 隔离范围。完整配置 `STRUCTCAPTURE_WAO_OIDC_*` 后，Capture BFF 会以短期 workload access token 调用 `POST /api/v1/agents/{id}/chat`；缺少配置、token、scope 不匹配、WAO 失败或超时时，立即继续 `STRUCTCAPTURE_LLM_*` 网关及本地整理路径。
 
-### WAO Agent chat 的后续接入条件
+### WAO Agent chat OIDC 上线清单
 
-原版 WAO 的 `POST /api/v1/agents/{id}/chat` 只接受 `Authorization: Bearer <JWT>`。JWT 必须由 WAO 信任的认证边界验证，并包含 `sub`、`tenant_id=structcapture`、`project_id=default` 与未过期的 `exp`；`roles` 可选。请求体中的 tenant/project 字段和 `X-Identity` 都不能生成 verified isolation claims。
+1. WAO 使用 `AGENTOS_ENV=production`、`AGENTOS_AUTH_MODE=oidc`，并配置 HTTPS `AGENTOS_OIDC_JWKS_URL`、`AGENTOS_OIDC_ISSUER`、`AGENTOS_OIDC_AUDIENCE`。
+2. BFF 的 `STRUCTCAPTURE_WAO_OIDC_ISSUER`、`STRUCTCAPTURE_WAO_OIDC_AUDIENCE` 与 WAO 的 issuer/audience **逐字相同**。
+3. IdP 的 client-credentials client 必须签发短期非对称 OIDC JWT，含 `sub`、`tenant_id=structcapture`、`project_id=default`、`exp`、匹配的 `iss` 和 `aud`。tenant/project 是 IdP 绑定的 claims，不是 BFF 可提交的参数。
+4. 将 client secret 仅存入 Vercel 的服务端环境变量；不要提交 `.env.local`。默认 OAuth Basic client authentication 不兼容时，应在 IdP/WAO 边界提供兼容 token endpoint，而不是在 BFF 自签 token。
 
-本项目不能安全地从 Capture BFF 铸造该 JWT：在 HS256 模式复制 `AGENTOS_JWT_SECRET` 到 Vercel 会让 BFF 获得 WAO 的签名根密钥。后续应将 WAO 配置为 OIDC，并由受信身份提供商向 BFF 工作负载签发短期、受众受限的服务 JWT。即使完成该接入，WAO 还必须提供不注入新能源汽车维修提示词的 pack-aware Agent invoke；否则仍不可发送家庭盘点内容。线上 VPS 当前 `/v1/chat/completions` 为 404，不应作为替代路径。
+原版 WAO 的 `POST /api/v1/agents/{id}/chat` 只接受 `Authorization: Bearer <JWT>`。JWT 必须由 WAO 信任的认证边界验证；请求体中的 tenant/project 字段和 `X-Identity` 都不能生成 verified isolation claims。Capture BFF 绝不配置、读取、共享 `AGENTOS_JWT_SECRET`，也绝不自签 HS256 AgentOS token。若本地 WAO 只能以 HS256 模式运行，本应用不提供绕过路径，直接回退模型网关/本地结果；生产必须使用 OIDC/JWKS。
 
 当前演示端点的健康检查：
 
