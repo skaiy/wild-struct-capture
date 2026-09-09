@@ -14,19 +14,29 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 
 ## 设置环境变量
 
-在 Vercel 项目 **Settings → Environment Variables** 中配置。没有 `WAO_BASE_URL` 时，应用会自动使用 DevStub；没有 `STRUCTCAPTURE_LLM_*` 时，Capture BFF 仍会用本地占位字段完成整理，演示和离线拍录仍可完成。
+在 Vercel 项目 **Settings → Environment Variables** 中配置。没有 `WAO_BASE_URL` 时，应用会自动使用 DevStub；没有 `STRUCTCAPTURE_LLM_*` 时，Capture BFF 仍会用本地规则和轻量线索整理字段，演示和离线拍录仍可完成。
 
 | 名称 | Production | Preview | Development | 是否公开 |
 | --- | --- | --- | --- | --- |
 | `WAO_BASE_URL` | `http://198.12.81.152:8088` 或 HTTPS 反代地址 | 使用测试 WAO，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
+| `STRUCTCAPTURE_WAO_AGENT_ID` | `e483332c-6b41-41cb-b1b5-1370b8438208`（可选） | 测试 Agent UUID，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址 | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
 | `STRUCTCAPTURE_LLM_MODEL` | 模型名（可选） | 测试模型名（可选） | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_TIMEOUT_MS` | 超时毫秒（可选） | 测试值（可选） | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_LLM_INCLUDE_IMAGES` | 仅在网关支持远程图片 URL 时设为 `true` | 通常保持 `false` | 本地 `.env.local` 可选 | 否 |
 
-`STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时默认 `15000` 毫秒，最大可设为 `60000` 毫秒。Vercel 经由远程模型网关或 VPS 时，建议使用 `30000`–`60000`，以降低因网络延迟而回退到本地占位字段的概率；本地模型池通常可保持较短超时。
+`STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时服务端默认 `25000` 毫秒，限制在 `20000`–`30000` 毫秒；浏览器的整理请求等待窗口更长。该范围兼顾 MiniMax 等远程模型网关的响应时间和 Vercel 函数的可用性。`STRUCTCAPTURE_LLM_INCLUDE_IMAGES` 默认关闭，保持 MiniMax 兼容的文本请求；仅在网关明确支持 `image_url` 内容块且图片地址可访问时开启。
 
-`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。当前演示端点的健康检查：
+`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询只读 Agent 目录，并校验其 `structcapture/default` 隔离范围；在 WAO 0.6 提供 pack-aware 的通用 Agent invoke 前，BFF 不会把拍录内容发送给其 EV-repair chat 路径，随后改用 `STRUCTCAPTURE_LLM_*` 网关。
+
+### WAO Agent chat 的后续接入条件
+
+原版 WAO 的 `POST /api/v1/agents/{id}/chat` 只接受 `Authorization: Bearer <JWT>`。JWT 必须由 WAO 信任的认证边界验证，并包含 `sub`、`tenant_id=structcapture`、`project_id=default` 与未过期的 `exp`；`roles` 可选。请求体中的 tenant/project 字段和 `X-Identity` 都不能生成 verified isolation claims。
+
+本项目不能安全地从 Capture BFF 铸造该 JWT：在 HS256 模式复制 `AGENTOS_JWT_SECRET` 到 Vercel 会让 BFF 获得 WAO 的签名根密钥。后续应将 WAO 配置为 OIDC，并由受信身份提供商向 BFF 工作负载签发短期、受众受限的服务 JWT。即使完成该接入，WAO 还必须提供不注入新能源汽车维修提示词的 pack-aware Agent invoke；否则仍不可发送家庭盘点内容。线上 VPS 当前 `/v1/chat/completions` 为 404，不应作为替代路径。
+
+当前演示端点的健康检查：
 
 ```bash
 curl --fail --show-error http://198.12.81.152:8088/health

@@ -22,6 +22,74 @@ function requestTimeout() {
     : 25_000;
 }
 
+function waoBaseUrl() {
+  const value = process.env.WAO_BASE_URL?.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString().replace(/\/$/, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAgentId(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+type WaoAgent = {
+  id?: string;
+  name?: string;
+  business_domain?: string;
+  tenant_id?: string;
+  project_id?: string;
+};
+
+/**
+ * WAO 0.6 lists the configured StructCapture Agent, but its public Agent chat
+ * and OpenAI-compatible completion handlers hard-code the EV-repair RAG prompt.
+ * They are therefore deliberately not invoked for home inventory data. This
+ * preserves the BFF's domain boundary until WAO offers a pack-aware generic
+ * Agent invocation surface.
+ */
+export async function enrichWithWaoAgent(
+  pack: KnowledgePack,
+  shots: Shot[],
+): Promise<WaoEnrichment | null> {
+  const baseUrl = waoBaseUrl();
+  const configuredAgent = process.env.STRUCTCAPTURE_WAO_AGENT_ID?.trim() || "structcapture-organizer";
+  if (!baseUrl || !configuredAgent || !pack.id || !shots.length) return null;
+
+  // Resolve from the read-only catalog even for a configured UUID. This checks
+  // the configured asset and its required claims scope without sending capture
+  // content to an incompatible WAO 0.6 chat endpoint.
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/agents`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(requestTimeout()),
+    });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    const payload = await response.json() as { agents?: WaoAgent[] };
+    const agent = payload.agents?.find(({ id, name }) =>
+      isAgentId(configuredAgent) ? id === configuredAgent : name === configuredAgent,
+    );
+    if (!agent?.id || agent.business_domain !== "structcapture" ||
+      agent.tenant_id !== "structcapture" || agent.project_id !== "default") {
+      console.warn("WAO StructCapture Agent is missing or has an unexpected scope", { configuredAgent });
+      return null;
+    }
+  } catch {
+    console.warn("WAO Agent catalog is unavailable; using model gateway fallback");
+    return null;
+  }
+
+  console.warn(
+    "WAO 0.6 Agent invocation is not used: it requires a trusted JWT and its available chat surface is EV-repair-specific",
+    { pack: pack.id },
+  );
+  return null;
+}
+
 function chatCompletionsUrl() {
   const value = process.env.STRUCTCAPTURE_LLM_BASE_URL?.trim();
   if (!value || !process.env.STRUCTCAPTURE_LLM_API_KEY?.trim()) return null;
