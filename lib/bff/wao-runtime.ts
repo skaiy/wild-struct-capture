@@ -4,12 +4,21 @@ type KnowledgePack = {
   id: string;
   labels: Record<string, string>;
   extractionRules: string[];
-  schema: { fields: Array<{ key: string }> };
+  schema: { fields: Array<{
+    key: string;
+    enum?: { options: string[]; synonyms?: Record<string, string | undefined> };
+  }> };
+};
+
+type WaoItem = {
+  fields: Record<string, { value: string; confidence: "high" | "medium" }>;
+  galleryShotIds: string[];
 };
 
 export type WaoEnrichment = {
   summary?: string;
   fields: Record<string, { value: string; confidence: "high" | "medium" }>;
+  items: WaoItem[];
 };
 
 function requestTimeout() {
@@ -220,10 +229,11 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
   return [
     "从证据提取知识包字段，输出可供人工确认的 JSON；不得推断。",
     `知识包=${pack.id}；字段标签=${JSON.stringify(pack.labels)}；规则=${pack.extractionRules.join("；")}`,
-    `仅允许 summary、${pack.schema.fields.map((field) => field.key).join("、")}；每个字段必须有 fields 条目，未知写“待确认”。`,
-    "字段值不可复制完整转录或 summary。多物品按相同顺序用“；”列出，例如名称“凡士林；儿童退烧药”，数量“凡士林 × 3；儿童退烧药 × 4”。",
+    `仅允许 summary、items、${pack.schema.fields.map((field) => field.key).join("、")}；每个 items 条目必须有 fields，未知写“待确认”。`,
+    `枚举字段及规范选项=${JSON.stringify(pack.schema.fields.filter((field) => field.enum).map((field) => ({ key: field.key, options: field.enum?.options, synonyms: field.enum?.synonyms })))}`,
+    "每件可辨识物品或车辆独立放入一个 items 条目，禁止在字段中以“；”合并多件；galleryShotNumbers 使用其证据照片的 1 起始编号。字段值不可复制完整转录或 summary。",
     "只返回 JSON，不要 Markdown：",
-    '{"summary":"string","fields":{"field_key":{"value":"string","confidence":"high|medium"}}}',
+    '{"summary":"string","items":[{"fields":{"field_key":{"value":"string","confidence":"high|medium"}},"galleryShotNumbers":[1]}]}',
     `文字证据：${JSON.stringify(evidence)}`,
   ].join("\n");
 }
@@ -277,7 +287,8 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): 
     if (field) fields[key] = field;
   }
   const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined;
-  return summary || Object.keys(fields).length ? { summary, fields } : null;
+  const items = parseEnrichmentItems(record.items, allowedKeys, shots);
+  return summary || Object.keys(fields).length || items.length ? { summary, fields, items } : null;
 }
 
 function parseEnrichmentField(rawField: unknown, shots: Shot[]): WaoEnrichment["fields"][string] | null {
@@ -294,6 +305,28 @@ function parseEnrichmentField(rawField: unknown, shots: Shot[]): WaoEnrichment["
     return null;
   }
   return { value, confidence: raw.confidence === "high" ? "high" : "medium" };
+}
+
+function parseEnrichmentItems(rawItems: unknown, allowedKeys: Set<string>, shots: Shot[]): WaoItem[] {
+  if (!Array.isArray(rawItems)) return [];
+  return rawItems.flatMap((rawItem) => {
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return [];
+    const item = rawItem as Record<string, unknown>;
+    const rawFields = item.fields;
+    if (!rawFields || typeof rawFields !== "object" || Array.isArray(rawFields)) return [];
+    const fields: WaoItem["fields"] = {};
+    for (const [key, rawField] of Object.entries(rawFields)) {
+      if (!allowedKeys.has(key)) continue;
+      const field = parseEnrichmentField(rawField, shots);
+      if (field) fields[key] = field;
+    }
+    const galleryShotIds = Array.isArray(item.galleryShotNumbers)
+      ? item.galleryShotNumbers.flatMap((number) =>
+        typeof number === "number" && Number.isInteger(number) && shots[number - 1] ? [shots[number - 1].id] : [],
+      )
+      : [];
+    return Object.keys(fields).length ? [{ fields, galleryShotIds }] : [];
+  });
 }
 
 function isTranscriptDump(value: string, shots: Shot[]) {

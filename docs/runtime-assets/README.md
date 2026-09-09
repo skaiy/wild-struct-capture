@@ -23,6 +23,12 @@ M5 的 BFF 默认先使用这里版本化的知识包生成本地字段。当前
 
 缺少配置、网关失败、超时或响应格式不正确时，BFF 忽略增强结果，保留本地字段并照常返回 `pending_hitl`。知识包和 Agent 资产仍可在 WAO registry 中版本化和安装；这不要求 WAO core 新增 `/sessions`、`/captures` 或领域通用 chat 路由。
 
+## 多项目与枚举扩展
+
+整理结果以 `items` 返回：每个可辨识物品或车辆拥有自己的字段和 `galleryShotIds`。旧版模型或 WAO Agent 返回的扁平字段仍会被 BFF 按中文分号拆分并对齐，保证已有集成可继续工作。
+
+知识包字段可选的 `enum.options` 和 `enum.synonyms` 是由 BFF 执行的业务字典。新增模板字段时，在对应 JSON 的字段上维护这两个列表；只有精确枚举值或明确同义词会规范化为选项值，其余输入固定为“待确认”。客户端会为这些字段提供可人工选择的规范值。
+
 ## 当前草案
 
 - `crash-prep.knowledge-pack.json`：碰撞实验准备。

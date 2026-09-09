@@ -1,6 +1,6 @@
 import crashPrepPack from "@/docs/runtime-assets/crash-prep.knowledge-pack.json";
 import homeInventoryPack from "@/docs/runtime-assets/home-inventory.knowledge-pack.json";
-import type { CaptureSession, OrganizedCapture, SchemaId, Shot, StructuredField } from "@/lib/types";
+import type { CaptureSession, OrganizedCapture, OrganizedItem, SchemaId, Shot, StructuredField } from "@/lib/types";
 import { captureStore } from "@/lib/bff/capture-store";
 import { enrichWithModelGateway, enrichWithWaoAgent, type WaoEnrichment } from "@/lib/bff/wao-runtime";
 
@@ -8,7 +8,13 @@ export type KnowledgePack = {
   id: string;
   labels: Record<string, string>;
   extractionRules: string[];
-  schema: { fields: Array<{ key: string }> };
+  schema: { fields: Array<{
+    key: string;
+    enum?: {
+      options: string[];
+      synonyms?: Record<string, string | undefined>;
+    };
+  }> };
 };
 
 const knowledgePacks: Record<SchemaId, KnowledgePack> = {
@@ -53,6 +59,69 @@ function valueFromShots(shots: Shot[]) {
 }
 
 const UNCONFIRMED = "待确认";
+
+function normalizeEnumValue(value: string, field: KnowledgePack["schema"]["fields"][number]) {
+  if (!field.enum || value === UNCONFIRMED) return value;
+  const normalized = value.trim();
+  const synonym = Object.entries(field.enum.synonyms ?? {}).find(([candidate]) => candidate === normalized)?.[1];
+  return field.enum.options.includes(normalized) ? normalized : synonym ?? UNCONFIRMED;
+}
+
+function structuredField(
+  pack: KnowledgePack,
+  key: string,
+  value: string | undefined,
+  confidence: StructuredField["confidence"] = "low",
+): StructuredField {
+  const definition = pack.schema.fields.find((field) => field.key === key);
+  const resolved = value?.trim() || UNCONFIRMED;
+  return {
+    key,
+    label: pack.labels[key] ?? key,
+    value: definition ? normalizeEnumValue(resolved, definition) : resolved,
+    confidence: resolved === UNCONFIRMED ? "low" : confidence,
+    ...(definition?.enum ? { enumOptions: definition.enum.options } : {}),
+  };
+}
+
+function splitAlignedValue(value: string | undefined, index: number, count: number) {
+  if (!value) return undefined;
+  const parts = value.split(/[；;]/).map((part) => part.trim()).filter(Boolean);
+  return parts.length === count ? parts[index] : parts.length === 1 ? parts[0] : undefined;
+}
+
+function itemsFromFlatFields(
+  schemaId: SchemaId,
+  shots: Shot[],
+  values: Record<string, { value: string; confidence: "high" | "medium" }>,
+): OrganizedItem[] {
+  const pack = knowledgePacks[schemaId];
+  const fieldValues = pack.schema.fields.map((field) => values[field.key]?.value);
+  const itemCount = Math.max(1, ...fieldValues.map((value) => value?.split(/[；;]/).filter(Boolean).length ?? 0));
+  return Array.from({ length: itemCount }, (_, index) => ({
+    id: crypto.randomUUID(),
+    fields: pack.schema.fields.map((field) => {
+      const source = values[field.key];
+      return structuredField(pack, field.key, splitAlignedValue(source?.value, index, itemCount), source?.confidence ?? "low");
+    }),
+    galleryShotIds: itemCount === 1 ? shots.map((shot) => shot.id) : shots[index] ? [shots[index].id] : [],
+  }));
+}
+
+function itemsFromEnrichment(schemaId: SchemaId, shots: Shot[], enrichment: WaoEnrichment | null): OrganizedItem[] {
+  if (!enrichment?.items.length) {
+    return itemsFromFlatFields(schemaId, shots, enrichment?.fields ?? {});
+  }
+  const pack = knowledgePacks[schemaId];
+  return enrichment.items.map((item) => ({
+    id: crypto.randomUUID(),
+    fields: pack.schema.fields.map((field) => {
+      const source = item.fields[field.key];
+      return structuredField(pack, field.key, source?.value, source?.confidence ?? "low");
+    }),
+    galleryShotIds: item.galleryShotIds.filter((id) => shots.some((shot) => shot.id === id)),
+  }));
+}
 
 function shotText(shots: Shot[]) {
   return shots.flatMap((shot) => [shot.caption, shot.direction]).filter(Boolean).join("；");
@@ -100,8 +169,7 @@ function buildFields(schemaId: SchemaId, shots: Shot[]): StructuredField[] {
   const pack = knowledgePacks[schemaId];
   const evidence = valueFromShots(shots);
   const hasEvidence = shots.some((shot) => shot.caption.trim() || shot.direction.trim());
-  const suggestions = schemaId === "home-inventory" ? homeInventorySuggestions(shots) : {};
-  const fields: StructuredField[] = [
+  return [
     { key: "schema", label: "记录模板", value: pack.labels.template, confidence: "high" },
     { key: "shot_count", label: pack.labels.shotCount, value: `${shots.length} 张`, confidence: "high" },
     {
@@ -111,16 +179,6 @@ function buildFields(schemaId: SchemaId, shots: Shot[]): StructuredField[] {
       confidence: hasEvidence ? "medium" : "low",
     },
   ];
-  for (const { key } of pack.schema.fields) {
-    const suggested = suggestions[key as keyof typeof suggestions];
-    fields.push({
-      key,
-      label: pack.labels[key] ?? key,
-      value: suggested || UNCONFIRMED,
-      confidence: suggested ? "medium" : "low",
-    });
-  }
-  return fields;
 }
 
 function joinKnown(values: Array<string | undefined>) {
@@ -186,32 +244,17 @@ function homeInventoryHeuristics(shots: Shot[]): WaoEnrichment | null {
   }
   const identified = fields.item_name?.value;
   return identified || Object.keys(fields).length
-    ? { summary: identified ? `已识别：${identified}；其余字段待人工确认。` : "已提取部分盘点线索，待人工确认。", fields }
+    ? { summary: identified ? `已识别：${identified}；其余字段待人工确认。` : "已提取部分盘点线索，待人工确认。", fields, items: [] }
     : null;
 }
 
-function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichment: WaoEnrichment | null) {
+function mergeEnrichment(fields: StructuredField[], enrichment: WaoEnrichment | null) {
   if (!enrichment) return fields;
-  const pack = knowledgePacks[schemaId];
-  const output = fields.map((field) =>
+  return fields.map((field) =>
     field.key === "summary" && enrichment.summary
       ? { ...field, value: enrichment.summary, confidence: "medium" as const }
       : field,
   );
-  for (const key of pack.schema.fields.map((field) => field.key)) {
-    const enriched = enrichment.fields[key];
-    if (!enriched) continue;
-    const field: StructuredField = {
-      key,
-      label: pack.labels[key] ?? key,
-      value: enriched.value,
-      confidence: enriched.confidence,
-    };
-    const existingIndex = output.findIndex((item) => item.key === key);
-    if (existingIndex >= 0) output[existingIndex] = field;
-    else output.push(field);
-  }
-  return output;
 }
 
 /**
@@ -232,7 +275,8 @@ export async function extract(session: CaptureSession, shots: Shot[]): Promise<O
     sessionId: session.id,
     schemaId: session.schemaId,
     status: "pending_hitl",
-    fields: mergeEnrichment(session.schemaId, buildFields(session.schemaId, shots), enrichment),
+    fields: mergeEnrichment(buildFields(session.schemaId, shots), enrichment),
+    items: itemsFromEnrichment(session.schemaId, shots, enrichment),
     gallery: shots,
     createdAt: new Date().toISOString(),
   });

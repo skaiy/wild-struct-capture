@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Check, Download, RotateCcw, Send, X } from "lucide-react";
-import type { OrganizedCapture } from "@/lib/types";
+import type { OrganizedCapture, Shot } from "@/lib/types";
 import type { WaoClient } from "@/lib/wao-client";
 
 function download(filename: string, content: string, type: string) {
@@ -47,8 +47,24 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
   function exportCsv() {
     if (!isApproved) return;
     const quote = (value: string) => `"${value.replaceAll("\"", "\"\"")}"`;
-    const rows = ["字段,值,置信度", ...capture.fields.map((field) => [field.label, field.value, field.confidence].map(quote).join(","))];
+    const rows = [
+      "项目,字段,值,置信度",
+      ...capture.fields.map((field) => ["会话信息", field.label, field.value, field.confidence].map(quote).join(",")),
+      ...capture.items.flatMap((item, index) =>
+        item.fields.map((field) => [`物品 ${index + 1}`, field.label, field.value, field.confidence].map(quote).join(",")),
+      ),
+    ];
     download(`structcapture-${capture.id}.csv`, `\uFEFF${rows.join("\n")}`, "text/csv;charset=utf-8");
+  }
+
+  function updateItemField(itemId: string, key: string, value: string) {
+    setCapture((current) => ({
+      ...current,
+      items: current.items.map((item) => item.id !== itemId ? item : {
+        ...item,
+        fields: item.fields.map((field) => field.key === key ? { ...field, value } : field),
+      }),
+    }));
   }
 
   return (
@@ -58,13 +74,25 @@ export function OrganizeResult({ initial, wao, onBack, onHome }: { initial: Orga
         <span className={`rounded-full px-3 py-1 text-sm font-semibold ${isApproved ? "bg-[#d7f1ee] text-teal-800" : "bg-amber-100 text-amber-800"}`}>{isApproved ? "已确认" : capture.status === "rejected" ? "已退回" : "待 HITL"}</span>
       </header>
       <section className="rounded-2xl border border-[#d9e6e3] bg-white p-5 shadow-sm">
-        <h2 className="font-bold">结构化字段</h2>
-        <p className="mt-1 text-sm text-[#607272]">请结合下方定向照片核对后再确认。</p>
+        <h2 className="font-bold">会话信息</h2>
+        <p className="mt-1 text-sm text-[#607272]">本次整理的模板、照片数量和概览。</p>
         <dl className="mt-3 divide-y divide-[#e6efed]">{capture.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></dt><dd className="mt-1 font-medium">{field.value}</dd></div>)}</dl>
       </section>
       <section className="mt-6">
-        <div className="mb-3 flex items-baseline justify-between"><h2 className="font-bold">定向照片</h2><span className="text-sm text-[#607272]">{capture.gallery.length} 条记录</span></div>
-        {capture.gallery.length === 0 ? <p className="rounded-xl bg-white p-4 text-sm text-[#607272]">本次没有拍摄照片，确认前请返回补充。</p> : <div className="grid grid-cols-2 gap-3">{capture.gallery.map((shot, index) => <article key={shot.id} className="overflow-hidden rounded-xl border border-[#d9e6e3] bg-white"><div className="relative grid aspect-square place-items-center bg-[#d7f1ee] text-teal-800">{shot.imageUrl ? <img src={shot.imageUrl} alt={shot.caption || `第 ${index + 1} 张照片`} className="size-full object-cover" /> : <span className="text-2xl font-bold">{index + 1}</span>}<span className="absolute left-2 top-2 grid size-6 place-items-center rounded-full bg-[#102a2a] text-xs font-bold text-white">{index + 1}</span></div><div className="space-y-1 p-3"><p className="text-sm font-medium">{shot.caption || "未填写说明"}</p>{shot.direction && <p className="text-xs text-[#607272]">{shot.direction}</p>}</div></article>)}</div>}
+        <div className="mb-3 flex items-baseline justify-between"><h2 className="font-bold">物品清单</h2><span className="text-sm text-[#607272]">{capture.items.length} 项</span></div>
+        <p className="mb-3 text-sm text-[#607272]">每项独立核对；带选项的字段可直接选择规范值。</p>
+        <div className="space-y-4">
+          {capture.items.map((item, itemIndex) => {
+            const linkedShots = item.galleryShotIds.map((id) => capture.gallery.find((shot) => shot.id === id)).filter((shot): shot is Shot => Boolean(shot));
+            return <article key={item.id} className="overflow-hidden rounded-2xl border border-[#c7d7d3] bg-white shadow-sm">
+              <div className="flex items-center justify-between bg-[#e7f5f2] px-4 py-3"><h3 className="font-bold text-teal-950">物品 {itemIndex + 1}</h3><span className="text-xs font-semibold text-teal-800">{linkedShots.length ? `关联 ${linkedShots.length} 张照片` : "未关联照片"}</span></div>
+              <dl className="divide-y divide-[#e6efed] px-4">
+                {item.fields.map((field) => <div key={field.key} className="py-3"><dt className="text-sm text-[#607272]">{field.label} <span className="ml-1 text-xs">{field.confidence === "high" ? "高置信" : field.confidence === "medium" ? "待确认" : "低置信"}</span></dt><dd className="mt-1 font-medium">{field.enumOptions ? <select aria-label={`${itemIndex + 1} ${field.label}`} value={field.value} onChange={(event) => updateItemField(item.id, field.key, event.target.value)} className="w-full rounded-lg border border-[#c7d7d3] bg-white p-2 text-base outline-none focus:border-teal-700"><option value="待确认">待确认</option>{field.enumOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select> : field.value}</dd></div>)}
+              </dl>
+              {linkedShots.length > 0 && <div className="grid grid-cols-2 gap-2 border-t border-[#e6efed] p-3">{linkedShots.map((shot) => <div key={shot.id} className="overflow-hidden rounded-lg bg-[#d7f1ee]">{shot.imageUrl ? <img src={shot.imageUrl} alt={shot.caption || "关联照片"} className="aspect-square w-full object-cover" /> : <p className="p-3 text-xs text-teal-900">{shot.caption || shot.direction || "未填写说明"}</p>}</div>)}</div>}
+            </article>;
+          })}
+        </div>
       </section>
       {capture.status === "pending_hitl" && <section className="mt-6 rounded-2xl bg-[#fff7e8] p-5"><h2 className="font-bold text-amber-950">人工确认（HITL）</h2><p className="mt-1 text-sm text-amber-900">未确认的整理结果不会提交，也不能导出。</p><div className="mt-4 grid grid-cols-2 gap-3"><button onClick={approve} className="flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-3 font-semibold text-white"><Check size={18} />确认并提交</button><button onClick={reject} className="flex items-center justify-center gap-2 rounded-xl border border-amber-800 px-4 py-3 font-semibold text-amber-900"><X size={18} />退回</button></div><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="退回原因（退回时必填）" className="mt-3 w-full rounded-xl border border-amber-200 bg-white p-3 text-sm outline-none focus:border-amber-700" /></section>}
       {isApproved && <section className="mt-6 rounded-2xl bg-[#e7f5f2] p-5"><h2 className="font-bold text-teal-950">导出已确认记录</h2><div className="mt-3 grid grid-cols-2 gap-3"><button onClick={exportJson} className="flex items-center justify-center gap-2 rounded-xl bg-teal-800 px-4 py-3 font-semibold text-white"><Download size={18} />JSON</button><button onClick={exportCsv} className="flex items-center justify-center gap-2 rounded-xl border border-teal-800 px-4 py-3 font-semibold text-teal-900"><Download size={18} />CSV</button></div></section>}

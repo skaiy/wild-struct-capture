@@ -42,9 +42,29 @@ export class DevStubWaoClient implements WaoClient {
       { key: "shot_count", label: "已记录照片", value: `${shots.length} 张`, confidence: "high" as const },
       { key: "summary", label: "现场摘要", value: shots.map((shot) => shot.caption).filter(Boolean).join("；") || "等待补充照片说明", confidence: "medium" as const },
     ];
+    const itemFields = session.schemaId === "home-inventory"
+      ? [
+        { key: "item_name", label: "物品名称", value: "待确认", confidence: "low" as const },
+        { key: "location", label: "存放位置", value: "待确认", confidence: "low" as const, enumOptions: ["药箱", "浴室柜", "厨房柜", "冰箱", "衣柜", "书柜", "抽屉", "储物箱", "车库", "其他"] },
+        { key: "condition", label: "物品状态", value: "待确认", confidence: "low" as const },
+        { key: "quantity", label: "数量", value: "待确认", confidence: "low" as const },
+      ]
+      : [
+        { key: "scene_location", label: "试验地点", value: "待确认", confidence: "low" as const },
+        { key: "vehicle_direction", label: "车辆朝向", value: "待确认", confidence: "low" as const, enumOptions: ["正向", "左前方", "右前方", "左侧", "右侧", "左后方", "右后方", "后向"] },
+        { key: "vehicle_position", label: "车辆位置", value: "待确认", confidence: "low" as const, enumOptions: ["起始线", "加速段", "碰撞点", "缓冲区", "安全区", "待命区"] },
+        { key: "safety_equipment", label: "安全设备", value: "待确认", confidence: "low" as const },
+      ];
     return {
       id: newId(), sessionId: session.id, schemaId: session.schemaId, status: "pending_hitl" as const,
-      fields, gallery: shots, createdAt: new Date().toISOString(),
+      fields,
+      items: [{
+        id: newId(),
+        fields: itemFields,
+        galleryShotIds: shots.map((shot) => shot.id),
+      }],
+      gallery: shots,
+      createdAt: new Date().toISOString(),
     };
   }
 

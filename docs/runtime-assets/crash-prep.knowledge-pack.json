@@ -1,16 +1,53 @@
 {
   "id": "crash-prep",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "schema": {
     "fields": [
       { "key": "scene_location", "type": "string", "required": true },
+      {
+        "key": "vehicle_direction",
+        "type": "string",
+        "required": true,
+        "enum": {
+          "options": ["正向", "左前方", "右前方", "左侧", "右侧", "左后方", "右后方", "后向"],
+          "synonyms": {
+            "车头朝前": "正向",
+            "正面": "正向",
+            "正前方": "正向",
+            "左前": "左前方",
+            "右前": "右前方",
+            "左边": "左侧",
+            "右边": "右侧",
+            "左后": "左后方",
+            "右后": "右后方",
+            "车尾朝前": "后向",
+            "倒向": "后向"
+          }
+        }
+      },
+      {
+        "key": "vehicle_position",
+        "type": "string",
+        "required": true,
+        "enum": {
+          "options": ["起始线", "加速段", "碰撞点", "缓冲区", "安全区", "待命区"],
+          "synonyms": {
+            "起点": "起始线",
+            "加速区": "加速段",
+            "撞击点": "碰撞点",
+            "隔离区": "安全区",
+            "停放区": "待命区"
+          }
+        }
+      },
       { "key": "safety_equipment", "type": "string", "required": true },
       { "key": "vehicle_condition", "type": "string", "required": false },
       { "key": "evidence_notes", "type": "string", "required": false }
     ]
   },
   "extractionRules": [
-    "仅根据照片说明和可见证据提取；不可推测未出现的事实。",
+    "以每辆可辨识车辆为单位输出一个独立 items 条目，保留关联照片编号；禁止用“；”合并多辆车辆。",
+    "仅根据照片说明和可见证据提取；不可推测未出现的事实。车辆方向和位置必须匹配对应枚举的规范标签或同义词，不能明确匹配时填写“待确认”。",
     "安全设备、人员隔离和试验区域必须优先记录。",
     "缺少证据的字段标记为待确认，不应编造。"
   ],
@@ -19,6 +56,8 @@
     "shotCount": "已记录照片",
     "summary": "现场摘要",
     "scene_location": "试验地点",
+    "vehicle_direction": "车辆朝向",
+    "vehicle_position": "车辆位置",
     "safety_equipment": "安全设备",
     "vehicle_condition": "车辆状态",
     "evidence_notes": "证据说明"
