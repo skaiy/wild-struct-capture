@@ -27,7 +27,7 @@ export type StructuredField = {
   key: string;
   label: string;
   value: string;
-  confidence: "high" | "medium";
+  confidence: "high" | "medium" | "low";
 };
 
 export type OrganizedCapture = {

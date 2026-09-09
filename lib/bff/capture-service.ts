@@ -28,6 +28,10 @@ export function getSession(sessionId: string) {
   return captureStore.getSession(sessionId);
 }
 
+export function saveSession(session: CaptureSession, shots: Shot[]) {
+  return captureStore.saveSession({ ...session, shots });
+}
+
 export function addShot(sessionId: string, payload: Pick<Shot, "caption" | "direction" | "imageUrl">) {
   const shot: Shot = {
     id: crypto.randomUUID(),
@@ -50,16 +54,30 @@ function valueFromShots(shots: Shot[]) {
 
 function buildFields(schemaId: SchemaId, shots: Shot[]): StructuredField[] {
   const pack = knowledgePacks[schemaId];
-  return [
+  const evidence = valueFromShots(shots);
+  const hasEvidence = shots.some((shot) => shot.caption.trim() || shot.direction.trim());
+  const fields: StructuredField[] = [
     { key: "schema", label: "记录模板", value: pack.labels.template, confidence: "high" },
     { key: "shot_count", label: pack.labels.shotCount, value: `${shots.length} 张`, confidence: "high" },
     {
       key: "summary",
       label: pack.labels.summary,
-      value: valueFromShots(shots),
-      confidence: shots.some((shot) => shot.caption.trim()) ? "medium" : "high",
+      value: evidence,
+      confidence: hasEvidence ? "medium" : "low",
     },
   ];
+  const placeholder = hasEvidence
+    ? `${evidence}（根据拍录说明整理，待人工确认）`
+    : `待确认：${pack.extractionRules[0]}`;
+  for (const { key } of pack.schema.fields) {
+    fields.push({
+      key,
+      label: pack.labels[key] ?? key,
+      value: placeholder,
+      confidence: hasEvidence ? "medium" : "low",
+    });
+  }
+  return fields;
 }
 
 function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichment: WaoEnrichment | null) {
@@ -92,6 +110,9 @@ function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichme
  * capture-specific WAO APIs.
  */
 export async function extract(session: CaptureSession, shots: Shot[]): Promise<OrganizedCapture> {
+  // Request data is authoritative because a serverless instance may not retain
+  // the in-memory session created by an earlier request.
+  saveSession(session, shots);
   const enrichment = await enrichWithModelGateway(knowledgePacks[session.schemaId], shots);
   return captureStore.saveCapture({
     id: crypto.randomUUID(),
