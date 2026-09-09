@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7faf9;
+  --foreground: #102a2a;
+  --primary: #115e59;
+  --primary-light: #d7f1ee;
+  --muted: #607272;
+}
+
+* { box-sizing: border-box; }
+html { background: var(--background); }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+button, input, textarea { font: inherit; }
