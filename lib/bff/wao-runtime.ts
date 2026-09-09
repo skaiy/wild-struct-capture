@@ -125,11 +125,13 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
   const apiKey = process.env.STRUCTCAPTURE_LLM_API_KEY?.trim();
   if (!endpoint || !apiKey) return null;
 
-  const imageParts = process.env.STRUCTCAPTURE_LLM_INCLUDE_IMAGES === "false"
-    ? []
-    : shots.flatMap((shot) => shot.imageUrl
+  const includeImages = process.env.STRUCTCAPTURE_LLM_INCLUDE_IMAGES === "true";
+  const imageParts = includeImages
+    ? shots.flatMap((shot) => shot.imageUrl
       ? [{ type: "image_url", image_url: { url: shot.imageUrl } }]
-      : []);
+      : [])
+    : [];
+  const prompt = buildPrompt(pack, shots);
 
   try {
     const response = await fetch(endpoint, {
@@ -139,7 +141,7 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
         model: process.env.STRUCTCAPTURE_LLM_MODEL?.trim() || "deepseek-v4-flash",
         messages: [
           { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON，且严格遵守用户给出的知识包 schema。" },
-          { role: "user", content: [{ type: "text", text: buildPrompt(pack, shots) }, ...imageParts] },
+          { role: "user", content: includeImages ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
         ],
         temperature: 0.1,
         max_tokens: 1_200,

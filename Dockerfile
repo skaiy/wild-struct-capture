@@ -5,6 +5,7 @@ RUN npm ci
 
 FROM node:22-alpine AS builder
 WORKDIR /app
+ENV DOCKER_BUILD=1
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
