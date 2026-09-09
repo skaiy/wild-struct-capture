@@ -37,6 +37,12 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 - 示例角色：文本默认 `deepseek-v4-flash`，视觉默认 `Qwen/Qwen3-VL-8B-Instruct`。
 - 模型名是运行时资产数据；API key 只留在模型池/WAO 的受控运行环境，绝不提交到仓库或下发给浏览器。
 
+## 业务隔离与 Chat 归属
+
+原版 WAO Agent chat 内置的“新能源汽车维修 RAG”属于另一项业务，不是 StructCapture 的领域能力；不能将其提示词、会话语义或交互流程视为本应用的实现基础。每个业务域必须可按 tenant、project 或 claims 等边界隔离，并使用独立的运行时资产（知识包、Agent、技能、提示词）及其激活版本。
+
+领域 Chat 应归业务客户端一侧所有：StructCapture 由 Capture BFF / PWA 定义 prompts、对话 UX 和 HITL，并继续持有业务 I/O、会话与审批状态。WAO core 仅作为运行时中间件，托管可热更新且可隔离的 packs、agents、skills 与隔离边界，并可选提供通用模型网关；它不拥有任何行业专属 Chat 语义。StructCapture 的 LLM 增强仍只经服务端 `STRUCTCAPTURE_LLM_*` OpenAI 兼容网关完成，与新能源车 Agent chat 路径解耦。
+
 ## 调用链
 
 1. PWA 通过 `WaoClient` 调用同源 `POST /api/wao/sessions` 与 session shots。

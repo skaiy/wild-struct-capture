@@ -7,9 +7,13 @@
 1. 在业务仓库审阅并版本化 JSON 资产；`id` 保持稳定，使用 `version` 标识变更。
 2. 通过原版 WAO 已有的资产管理、Agent/技能/提示词导入能力上传资产（具体命令由部署的 WAO 版本决定）。
 3. 在 WAO 中激活所需版本；无需重新编译、部署或修改 WAO Rust。
-4. 由 StructCapture BFF 将业务请求提交给 WAO 的**通用** Agent chat/task 能力（若部署启用），并始终保留本地资产驱动的整理回退。
+4. 由 StructCapture BFF 按需使用 WAO 的**通用**运行时 task 能力（若部署启用），并始终保留本地资产驱动的整理回退。
 
 `structcapture.agent.json` 只声明模型角色和模型标识，不含 API key、端点密码或其他密钥。密钥只由 WAO/模型池的运行时环境配置管理。
+
+StructCapture 的领域 Chat 提示词、对话体验和 HITL 位于业务客户端 / Capture BFF 的 enrichment 路径，不属于 WAO core。
+WAO 上的 packs、agents 与 skills 是可按 tenant、project 或 claims 隔离的运行时资产，可由不同业务分别安装和激活。
+原版 WAO 的新能源车维修 RAG Agent 是另一项业务资产，不是 StructCapture 的 Chat 实现。
 
 ## 可选的模型网关增强
 
