@@ -52,10 +52,44 @@ function valueFromShots(shots: Shot[]) {
   return shots.map((shot) => shot.caption || shot.direction).filter(Boolean).join("；") || "等待补充照片说明";
 }
 
+const UNCONFIRMED = "待确认";
+
+function shotText(shots: Shot[]) {
+  return shots.flatMap((shot) => [shot.caption, shot.direction]).filter(Boolean).join("；");
+}
+
+function homeInventorySuggestions(shots: Shot[]) {
+  const text = shotText(shots);
+  const quantities: Array<{ item: string; quantity: string }> = [];
+  const seenItems = new Set<string>();
+  for (const segment of text.split(/[；;，,、+＋]/)) {
+    const match = segment.match(/(.+?)\s*(?:×|x|X|\*)\s*(\d+)\b/);
+    if (!match) continue;
+    const item = match[1]
+      .replace(/^.*?(?:有|放着|包括|存有|是)\s*/, "")
+      .replace(/^(?:共|各)\s*/, "")
+      .trim();
+    if (item && !seenItems.has(item)) {
+      seenItems.add(item);
+      quantities.push({ item, quantity: match[2] });
+    }
+  }
+  const location = text.match(/(?:放在|放于|存放在|存放于|位于|在)\s*([^，；;。]{1,30}(?:柜|箱|架|抽屉|桌|台|间|室|区|层|内|里|上|下|旁|边))/)?.[1]?.trim()
+    ?? text.match(/([\u4e00-\u9fffA-Za-z0-9]{2,20}(?:柜|箱|架|抽屉|桌|台|间|室|区|层)(?:内|里|上|下|旁|边)?)/)?.[1];
+  const condition = text.match(/(全新|未开封|已开封|完好|破损|过期|临期|潮湿|污损)/)?.[1];
+  return {
+    item_name: quantities.map(({ item }) => item).join("；"),
+    quantity: quantities.map(({ item, quantity }) => `${item} × ${quantity}`).join("；"),
+    location,
+    condition,
+  };
+}
+
 function buildFields(schemaId: SchemaId, shots: Shot[]): StructuredField[] {
   const pack = knowledgePacks[schemaId];
   const evidence = valueFromShots(shots);
   const hasEvidence = shots.some((shot) => shot.caption.trim() || shot.direction.trim());
+  const suggestions = schemaId === "home-inventory" ? homeInventorySuggestions(shots) : {};
   const fields: StructuredField[] = [
     { key: "schema", label: "记录模板", value: pack.labels.template, confidence: "high" },
     { key: "shot_count", label: pack.labels.shotCount, value: `${shots.length} 张`, confidence: "high" },
@@ -66,15 +100,13 @@ function buildFields(schemaId: SchemaId, shots: Shot[]): StructuredField[] {
       confidence: hasEvidence ? "medium" : "low",
     },
   ];
-  const placeholder = hasEvidence
-    ? `${evidence}（根据拍录说明整理，待人工确认）`
-    : `待确认：${pack.extractionRules[0]}`;
   for (const { key } of pack.schema.fields) {
+    const suggested = suggestions[key as keyof typeof suggestions];
     fields.push({
       key,
       label: pack.labels[key] ?? key,
-      value: placeholder,
-      confidence: hasEvidence ? "medium" : "low",
+      value: suggested || UNCONFIRMED,
+      confidence: suggested ? "medium" : "low",
     });
   }
   return fields;

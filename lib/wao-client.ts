@@ -11,6 +11,7 @@ export interface WaoClient {
 }
 
 const newId = () => crypto.randomUUID();
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export class DevStubWaoClient implements WaoClient {
   private sessions = new Map<string, CaptureSession>();
@@ -76,6 +77,7 @@ export class HttpWaoClient implements WaoClient {
     const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}${path}`, {
       ...init,
       headers: { "content-type": "application/json", ...init?.headers },
+      signal: init?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`WAO 请求失败 (${response.status})`);
     return response.json() as Promise<T>;
