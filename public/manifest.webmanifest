@@ -1,0 +1,13 @@
+{
+  "name": "Wild StructCapture",
+  "short_name": "StructCapture",
+  "description": "多轮自然语言拍照与结构化复核",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f2",
+  "theme_color": "#141c18",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
