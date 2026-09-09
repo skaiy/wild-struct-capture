@@ -14,7 +14,9 @@ export type WaoEnrichment = {
 
 function requestTimeout() {
   const parsed = Number(process.env.STRUCTCAPTURE_LLM_TIMEOUT_MS);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 15_000) : 5_000;
+  // Keep the local default responsive, while allowing slower remote model gateways
+  // up to one minute. Calls remain best-effort and fall back to placeholder fields.
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 60_000) : 15_000;
 }
 
 function chatCompletionsUrl() {
@@ -119,9 +121,18 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
       cache: "no-store",
       signal: AbortSignal.timeout(requestTimeout()),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn("LLM enrichment request failed", { status: response.status });
+      return null;
+    }
     return parseEnrichment(await response.json(), pack);
-  } catch {
+  } catch (error) {
+    const reason = error instanceof DOMException && error.name === "TimeoutError"
+      ? "timeout"
+      : error instanceof Error
+        ? error.name
+        : "unknown";
+    console.warn("LLM enrichment request failed", { reason });
     return null;
   }
 }
