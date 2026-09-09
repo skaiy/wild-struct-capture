@@ -6,8 +6,8 @@ export interface WaoClient {
   listShots(sessionId: string): Promise<Shot[]>;
   extract(session: CaptureSession, shots: Shot[]): Promise<OrganizedCapture>;
   organize(session: CaptureSession, shots: Shot[]): Promise<OrganizedCapture>;
-  approve(captureId: string): Promise<OrganizedCapture>;
-  reject(captureId: string, reason: string): Promise<OrganizedCapture>;
+  approve(capture: OrganizedCapture): Promise<OrganizedCapture>;
+  reject(capture: OrganizedCapture, reason: string): Promise<OrganizedCapture>;
 }
 
 const newId = () => crypto.randomUUID();
@@ -52,19 +52,19 @@ export class DevStubWaoClient implements WaoClient {
     return capture;
   }
 
-  async approve(captureId: string) {
-    const capture = this.captures.get(captureId);
+  async approve(fallbackCapture: OrganizedCapture) {
+    const capture = this.captures.get(fallbackCapture.id) ?? fallbackCapture;
     if (!capture) throw new Error("整理结果不存在");
     const approved = { ...capture, status: "approved" as const };
-    this.captures.set(captureId, approved);
+    this.captures.set(capture.id, approved);
     return approved;
   }
 
-  async reject(captureId: string, reason: string) {
-    const capture = this.captures.get(captureId);
+  async reject(fallbackCapture: OrganizedCapture, reason: string) {
+    const capture = this.captures.get(fallbackCapture.id) ?? fallbackCapture;
     if (!capture) throw new Error("整理结果不存在");
     const rejected = { ...capture, status: "rejected" as const, rejectionReason: reason };
-    this.captures.set(captureId, rejected);
+    this.captures.set(capture.id, rejected);
     return rejected;
   }
 }
@@ -101,12 +101,12 @@ export class HttpWaoClient implements WaoClient {
     return this.request<OrganizedCapture>("/captures/organize", { method: "POST", body: JSON.stringify({ session, shots }) });
   }
 
-  approve(captureId: string) {
-    return this.request<OrganizedCapture>(`/captures/${captureId}/approve`, { method: "POST" });
+  approve(capture: OrganizedCapture) {
+    return this.request<OrganizedCapture>(`/captures/${capture.id}/approve`, { method: "POST", body: JSON.stringify({ capture }) });
   }
 
-  reject(captureId: string, reason: string) {
-    return this.request<OrganizedCapture>(`/captures/${captureId}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+  reject(capture: OrganizedCapture, reason: string) {
+    return this.request<OrganizedCapture>(`/captures/${capture.id}/reject`, { method: "POST", body: JSON.stringify({ reason, capture }) });
   }
 }
 
@@ -136,11 +136,11 @@ class FallbackWaoClient implements WaoClient {
   organize(session: CaptureSession, shots: Shot[]) {
     return this.useFallback(() => this.primary.organize(session, shots), () => this.fallback.organize(session, shots));
   }
-  approve(captureId: string) {
-    return this.useFallback(() => this.primary.approve(captureId), () => this.fallback.approve(captureId));
+  approve(capture: OrganizedCapture) {
+    return this.useFallback(() => this.primary.approve(capture), () => this.fallback.approve(capture));
   }
-  reject(captureId: string, reason: string) {
-    return this.useFallback(() => this.primary.reject(captureId, reason), () => this.fallback.reject(captureId, reason));
+  reject(capture: OrganizedCapture, reason: string) {
+    return this.useFallback(() => this.primary.reject(capture, reason), () => this.fallback.reject(capture, reason));
   }
 }
 

@@ -1,6 +1,8 @@
 # Vercel Hobby 部署与手机安装清单
 
-本项目是一个 Next.js PWA，可部署在 Vercel Hobby。拍录数据首先存于手机浏览器；当前的会话 API 使用内存存储，因此**不能**当作生产数据仓库。
+本项目是一个 Next.js PWA，可部署在 Vercel Hobby，并通过公开 HTTPS 域名完成「整理 → HITL 确认/退回 → 导出」演示。拍录数据首先存于手机浏览器；当前的会话 API 使用内存存储，因此**不能**当作生产数据仓库。
+
+Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使公开演示可端到端完成，HITL 请求会同时携带浏览器当前的整理结果；BFF 内存命中时仍优先使用服务端副本，未命中时才使用该结果并尽力写回内存。这是演示用的客户端辅助 HITL，不是生产归档或防篡改工作流。
 
 ## 部署前检查
 
@@ -42,8 +44,9 @@ curl --fail --show-error https://<你的域名>/api/wao/health
 
 1. 在 GitHub 推送分支，Vercel 会生成 Preview；合并到生产分支后生成 Production 部署。
 2. 打开 Preview，在手机上完成一次拍照、填写说明、点击「完成并提交整理」。
-3. WAO 健康检查失败或变量未设置时，确认仍能进入待人工确认的 DevStub 结果；这不是 WAO 已成功写入的证明。
-4. 在 Production 域名重复一次拍照和安装检查。
+3. 在结果页分别确认或退回一次；即使请求落到新的 Serverless 实例，HITL 仍应完成，确认后可导出 JSON 或 CSV。
+4. WAO 健康检查失败或变量未设置时，确认仍能进入待人工确认的 DevStub 结果；这不是 WAO 已成功写入的证明。
+5. 在 Production 域名重复一次拍照和安装检查。
 
 ## 可选：Caddy 以 `/wao` 反代 VPS
 
