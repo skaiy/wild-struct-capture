@@ -50,7 +50,7 @@ export class DevStubWaoClient implements WaoClient {
         fields: session.schemaId === "crash-prep"
           ? [
             { key: "scene_location", label: "试验地点", value: "待确认", confidence: "low" as const },
-            { key: "vehicle_direction_position", label: "车辆方向/位置", value: "待确认", confidence: "low" as const, options: ["正前方", "正后方", "左前方", "右前方", "左侧", "右侧", "驾驶员侧", "副驾驶侧", "试验位中央", "试验位左侧", "试验位右侧", "待命区"] },
+            { key: "vehicle_direction", label: "车辆方向", value: "待确认", confidence: "low" as const, options: ["正前", "正后", "左侧", "右侧", "前左45°", "前右45°", "后左45°", "后右45°"] },
             { key: "safety_equipment", label: "安全设备", value: "待确认", confidence: "low" as const },
             { key: "vehicle_condition", label: "车辆状态", value: "待确认", confidence: "low" as const },
             { key: "evidence_notes", label: "证据说明", value: "待确认", confidence: "low" as const },
