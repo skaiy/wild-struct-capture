@@ -19,6 +19,64 @@ function requestTimeout() {
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 60_000) : 15_000;
 }
 
+function waoBaseUrl() {
+  const value = process.env.WAO_BASE_URL?.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.toString().replace(/\/$/, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAgentId(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+/**
+ * WAO 0.6 lists the configured StructCapture Agent, but its public Agent chat
+ * and OpenAI-compatible completion handlers hard-code the EV-repair RAG prompt.
+ * They are therefore deliberately not invoked for home inventory data. This
+ * preserves the BFF's domain boundary until WAO offers a pack-aware generic
+ * Agent invocation surface.
+ */
+export async function enrichWithWaoAgent(
+  pack: KnowledgePack,
+  shots: Shot[],
+): Promise<WaoEnrichment | null> {
+  const baseUrl = waoBaseUrl();
+  const configuredAgent = process.env.STRUCTCAPTURE_WAO_AGENT_ID?.trim() || "structcapture-organizer";
+  if (!baseUrl || !configuredAgent || !pack.id || !shots.length) return null;
+
+  // An explicit UUID is enough to identify the intended runtime asset. A name
+  // is resolved from the read-only Agent catalog to retain the documented
+  // name-based configuration option without sending capture data to WAO.
+  if (!isAgentId(configuredAgent)) {
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/agents`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(requestTimeout()),
+      });
+      const payload = await response.json() as { agents?: Array<{ id?: string; name?: string }> };
+      const agent = payload.agents?.find(({ name }) => name === configuredAgent);
+      if (!agent?.id) {
+        console.warn("WAO StructCapture Agent was not found", { configuredAgent });
+        return null;
+      }
+    } catch {
+      console.warn("WAO Agent catalog is unavailable; using model gateway fallback");
+      return null;
+    }
+  }
+
+  console.warn(
+    "WAO 0.6 Agent invocation is not used: its available chat/completions surfaces are EV-repair-specific",
+    { pack: pack.id },
+  );
+  return null;
+}
+
 function chatCompletionsUrl() {
   const value = process.env.STRUCTCAPTURE_LLM_BASE_URL?.trim();
   if (!value || !process.env.STRUCTCAPTURE_LLM_API_KEY?.trim()) return null;

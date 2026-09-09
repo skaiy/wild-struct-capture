@@ -23,7 +23,7 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 - 公开拍录业务契约：会话、照片、`extract`、`organize`、`approve`、`reject`。
 - 业务权威存储：sessions、shots、organized captures、HITL 状态和退回原因。当前为可替换的内存 Store，生产环境替换为数据库适配器。
 - 按知识包/Agent 配置所定义的 schema、规则、标签组织结果；负责校验、审计、授权和最终导出前的 HITL 门禁。
-- 可在 WAO 健康且配置完成时调用其**通用** Agent chat/task API 做最佳努力的推理增强；失败或不可用时仍使用本地资产驱动的整理路径。
+- 优先检查原版 WAO 中已配置的 StructCapture Agent；当 WAO 提供 pack-aware 的通用 Agent invoke 面时，BFF 可用它做最佳努力的推理增强。当前 WAO 0.6 的公开 Agent 调用面不符合此条件，BFF 会改用独立模型网关或本地资产驱动的整理路径。
 
 ### 原版 WAO 运行时中间件
 
@@ -41,7 +41,7 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 
 原版 WAO Agent chat 内置的“新能源汽车维修 RAG”属于另一项业务，不是 StructCapture 的领域能力；不能将其提示词、会话语义或交互流程视为本应用的实现基础。每个业务域必须可按 tenant、project 或 claims 等边界隔离，并使用独立的运行时资产（知识包、Agent、技能、提示词）及其激活版本。
 
-领域 Chat 应归业务客户端一侧所有：StructCapture 由 Capture BFF / PWA 定义 prompts、对话 UX 和 HITL，并继续持有业务 I/O、会话与审批状态。WAO core 仅作为运行时中间件，托管可热更新且可隔离的 packs、agents、skills 与隔离边界，并可选提供通用模型网关；它不拥有任何行业专属 Chat 语义。StructCapture 的 LLM 增强仍只经服务端 `STRUCTCAPTURE_LLM_*` OpenAI 兼容网关完成，与新能源车 Agent chat 路径解耦。
+领域 Chat 应归业务客户端一侧所有：StructCapture 由 Capture BFF / PWA 定义 prompts、对话 UX 和 HITL，并继续持有业务 I/O、会话与审批状态。原版 WAO 仅作为运行时中间件，托管可热更新且可隔离的 packs、agents、skills 与隔离边界，并可选提供通用模型网关；它不拥有任何行业专属 Chat 语义。StructCapture 的 LLM 增强仍只经服务端 `STRUCTCAPTURE_LLM_*` OpenAI 兼容网关完成，与新能源车 Agent chat 路径解耦。
 
 ## 调用链
 
@@ -52,11 +52,13 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 5. BFF 保存整理结果，返回 `pending_hitl`。
 6. PWA 调用 BFF 的 approve/reject；BFF 更新权威 HITL 状态。仅 `approved` 可导出。
 
-## M5：可选模型网关增强
+## M5：原版 WAO Agent 探测与模型网关回退
 
-`extract` 与 `organize` 先同步构建本地知识包字段。原版 WAO 0.6 的 `POST /api/v1/agents/:id/chat` 和 OpenAI 兼容 Agent 路径会在 `build_chat_context` 注入面向“新能源汽车故障诊断/维修 RAG”的系统提示词，故它们不是 StructCapture 可用的领域无关整理接口。BFF 不调用这些路径，也不以 WAO 健康状态决定业务可用性。
+`extract` 与 `organize` 先同步构建本地知识包字段。配置 `WAO_BASE_URL` 后，BFF 优先读取原版 WAO Agent 目录，并以 `STRUCTCAPTURE_WAO_AGENT_ID`（默认名称为 `structcapture-organizer`）定位已安装的 StructCapture Agent。线上 Agent `e483332c-6b41-41cb-b1b5-1370b8438208` 绑定 home-inventory 与 crash-prep packs。
 
-当服务端同时配置 `STRUCTCAPTURE_LLM_BASE_URL` 与 `STRUCTCAPTURE_LLM_API_KEY` 时，BFF 会最佳努力向该 OpenAI 兼容网关的 `/v1/chat/completions` 发送 pack 的规则、标签、schema 和照片 caption/direction。该共享模型网关与 WAO 的 WildPool/new-api 使用方式同类，但不经过 WAO 的车修 RAG Agent；`STRUCTCAPTURE_LLM_MODEL` 默认 `deepseek-v4-flash`。POC 的 `imageUrl` 仅是引用，不能假定网关已下载或读取图片。
+实测/源码核对的 WAO 0.6 调用面只有 `POST /api/v1/agents/:id/chat`、`POST /api/v1/public/agents/:id/chat` 与 OpenAI 兼容的 `POST /v1/chat/completions`（`model=agentId`）。它们需要受控 bearer key，且共同的 `build_chat_context` 会注入“新能源汽车故障诊断与维修”系统提示词。因此它不是 pack-aware 的 StructCapture Agent invocation，BFF **不得调用**这些 EV-repair 路径，也不会虚构 PD/CA 或其他不存在的 API。
+
+Agent 目录读取、找不到 Agent 或该受限调用面都会无害地回退。服务端同时配置 `STRUCTCAPTURE_LLM_BASE_URL` 与 `STRUCTCAPTURE_LLM_API_KEY` 时，BFF 会最佳努力向该 OpenAI 兼容网关的 `/v1/chat/completions` 发送 pack 的规则、标签、schema 和照片 caption/direction。该共享模型网关不经过 WAO 的车修 RAG Agent；`STRUCTCAPTURE_LLM_MODEL` 默认 `deepseek-v4-flash`。POC 的 `imageUrl` 仅是引用，不能假定网关已下载或读取图片。两个远程增强都不能使用时，home-inventory 仅填充可从 caption/direction 直接识别的品牌、规格、有效期、位置、数量和品类，其余字段为“待确认”，不转储整段说明。
 
 模型的结构化回答只能替换摘要并补充当前 pack 中定义的键，不能改变 `schema`、`shot_count`、`pending_hitl` 或任何业务状态。未配置变量、网关拒绝、超时、非成功响应或无法解析的回答都返回 `null` 增强，BFF 继续保存本地结果。因此该调用既不要求 WAO 可用，也不引入 WAO `/sessions` 或 `/captures/*` 路由。知识包和 Agent 仍可作为可安装的版本化 WAO runtime 资产保留。
 

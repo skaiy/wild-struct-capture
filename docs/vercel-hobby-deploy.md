@@ -14,11 +14,12 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 
 ## 设置环境变量
 
-在 Vercel 项目 **Settings → Environment Variables** 中配置。没有 `WAO_BASE_URL` 时，应用会自动使用 DevStub；没有 `STRUCTCAPTURE_LLM_*` 时，Capture BFF 仍会用本地占位字段完成整理，演示和离线拍录仍可完成。
+在 Vercel 项目 **Settings → Environment Variables** 中配置。没有 `WAO_BASE_URL` 时，应用会自动使用 DevStub；没有 `STRUCTCAPTURE_LLM_*` 时，Capture BFF 仍会用本地规则和轻量线索整理字段，演示和离线拍录仍可完成。
 
 | 名称 | Production | Preview | Development | 是否公开 |
 | --- | --- | --- | --- | --- |
 | `WAO_BASE_URL` | `http://198.12.81.152:8088` 或 HTTPS 反代地址 | 使用测试 WAO，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
+| `STRUCTCAPTURE_WAO_AGENT_ID` | `e483332c-6b41-41cb-b1b5-1370b8438208`（可选） | 测试 Agent UUID，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址 | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
 | `STRUCTCAPTURE_LLM_MODEL` | 模型名（可选） | 测试模型名（可选） | 本地 `.env.local` 可选 | 否 |
@@ -26,7 +27,9 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 
 `STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时默认 `15000` 毫秒，最大可设为 `60000` 毫秒。Vercel 经由远程模型网关或 VPS 时，建议使用 `30000`–`60000`，以降低因网络延迟而回退到本地占位字段的概率；本地模型池通常可保持较短超时。
 
-`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。当前演示端点的健康检查：
+`WAO_BASE_URL` 只由 `/api/wao` 服务端网关读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询只读 Agent 目录；在 WAO 0.6 提供 pack-aware 的通用 Agent invoke 前，BFF 不会把拍录内容发送给其 EV-repair chat/completions 路径，随后改用 `STRUCTCAPTURE_LLM_*` 网关。
+
+当前演示端点的健康检查：
 
 ```bash
 curl --fail --show-error http://198.12.81.152:8088/health
