@@ -14,9 +14,12 @@ export type WaoEnrichment = {
 
 function requestTimeout() {
   const parsed = Number(process.env.STRUCTCAPTURE_LLM_TIMEOUT_MS);
-  // Enrichment is optional: preserve a responsive pending-HITL response even when
-  // a remote model is slow or unavailable.
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 10_000) : 8_000;
+  // Long Chinese multi-item transcripts need more than the old 8–10 second
+  // window. Keep this bounded for the BFF while allowing the env to tune the
+  // budget within a range proven practical for the shared model gateways.
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(Math.max(parsed, 20_000), 30_000)
+    : 25_000;
 }
 
 function chatCompletionsUrl() {
@@ -40,16 +43,11 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
     hasImage: Boolean(imageUrl),
   }));
   return [
-    "你是知识包驱动的结构化信息提取器。仅根据给出的照片、说明、方向和可见证据提出待人工审核的建议；不得把推断写成事实。",
-    `知识包：${pack.id}`,
-    `字段标签：${JSON.stringify(pack.labels)}`,
-    `提取规则：${pack.extractionRules.join("；")}`,
-    `允许字段：summary、${pack.schema.fields.map((field) => field.key).join("、")}`,
-    "必须为每个允许字段返回一个 fields 条目。证据不足时 value 写“待确认”、confidence 写“medium”，不要省略字段。",
-    "每个字段只填写该字段的值：绝不可把原始整句说明、完整照片转录或 summary 复制到多个字段。",
-    "若存在多个可辨识物品/物品组，保持相同顺序并用“；”分隔。例如物品名称“凡士林；Panadol”，数量“凡士林 × 3；Panadol × 4”。不要把多个物品合并成一个名称。",
-    "quantity 仅填写明确数量；location 和 condition 仅填写有证据的值。未知字段写“待确认”。",
-    "只返回 JSON 对象，不要 Markdown、代码围栏或说明文字：",
+    "从证据提取知识包字段，输出可供人工确认的 JSON；不得推断。",
+    `知识包=${pack.id}；字段标签=${JSON.stringify(pack.labels)}；规则=${pack.extractionRules.join("；")}`,
+    `仅允许 summary、${pack.schema.fields.map((field) => field.key).join("、")}；每个字段必须有 fields 条目，未知写“待确认”。`,
+    "字段值不可复制完整转录或 summary。多物品按相同顺序用“；”列出，例如名称“凡士林；儿童退烧药”，数量“凡士林 × 3；儿童退烧药 × 4”。",
+    "只返回 JSON，不要 Markdown：",
     '{"summary":"string","fields":{"field_key":{"value":"string","confidence":"high|medium"}}}',
     `文字证据：${JSON.stringify(evidence)}`,
   ].join("\n");

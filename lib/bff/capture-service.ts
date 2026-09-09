@@ -60,18 +60,27 @@ function shotText(shots: Shot[]) {
 
 function homeInventorySuggestions(shots: Shot[]) {
   const text = shotText(shots);
-  const quantities: Array<{ item: string; quantity: string }> = [];
+  const quantities: Array<{ item: string; quantity: string; location?: string }> = [];
   const seenItems = new Set<string>();
-  for (const segment of text.split(/[；;，,、+＋]/)) {
-    const match = segment.match(/(.+?)\s*(?:×|x|X|\*)\s*(\d+)\b/);
-    if (!match) continue;
-    const item = match[1]
-      .replace(/^.*?(?:有|放着|包括|存有|是)\s*/, "")
+  const numberMap: Record<string, string> = { 一: "1", 二: "2", 两: "2", 三: "3", 四: "4", 五: "5", 六: "6", 七: "7", 八: "8", 九: "9", 十: "10" };
+  const addItem = (item: string, quantity: string, segment: string) => {
+    const cleanItem = item
+      .replace(/^.*?(?:有|放着|包括|存有|买来|购买|是)\s*/, "")
       .replace(/^(?:共|各)\s*/, "")
       .trim();
-    if (item && !seenItems.has(item)) {
-      seenItems.add(item);
-      quantities.push({ item, quantity: match[2] });
+    const location = segment.match(/(?:放在|放于|存放在|存放于|位于)\s*([^，；;。…]{1,30})/)?.[1]?.trim();
+    if (cleanItem && !seenItems.has(cleanItem)) {
+      seenItems.add(cleanItem);
+      quantities.push({ item: cleanItem, quantity, location });
+    }
+  };
+
+  for (const segment of text.split(/(?:还有|；|;|。|[+＋])/)) {
+    const multiplier = segment.match(/(.+?)\s*(?:×|x|X|\*)\s*(\d+)\b/);
+    if (multiplier) addItem(multiplier[1], multiplier[2], segment);
+    const chineseCount = segment.match(/([一二三四五六七八九十两\d]+)(?:个|瓶|盒|支|包|片|罐)?([\u4e00-\u9fffA-Za-z0-9-]{2,30}?)(?=(?:…|放在|放于|存放在|存放于|位于|，|$))/);
+    if (chineseCount) {
+      addItem(chineseCount[2], numberMap[chineseCount[1]] ?? chineseCount[1], segment);
     }
   }
   const location = text.match(/(?:放在|放于|存放在|存放于|位于|在)\s*([^，；;。]{1,30}(?:柜|箱|架|抽屉|桌|台|间|室|区|层|内|里|上|下|旁|边))/)?.[1]?.trim()
@@ -80,7 +89,9 @@ function homeInventorySuggestions(shots: Shot[]) {
   return {
     item_name: quantities.map(({ item }) => item).join("；"),
     quantity: quantities.map(({ item, quantity }) => `${item} × ${quantity}`).join("；"),
-    location,
+    location: quantities.some(({ location: itemLocation }) => itemLocation)
+      ? quantities.map(({ item, location: itemLocation }) => `${item}：${itemLocation ?? UNCONFIRMED}`).join("；")
+      : location,
     condition,
   };
 }
