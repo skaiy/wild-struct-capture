@@ -120,7 +120,7 @@ function homeInventoryHeuristics(shots: Shot[]): WaoEnrichment | null {
     brand: entries.map((entry) => joinKnown(brands.map(([pattern, value]) => pattern.test(entry) ? value : undefined))),
     specification: entries.map((entry) => entry.match(/\b\d+(?:\.\d+)?\s*(?:ml|mL|ML|g|kg|毫升|克|片|粒)\b/)?.[0]),
     expiry_date: entries.map((entry) =>
-      entry.match(/(?:有效期|保质期|到期(?:日)?)[：:\s]*((?:20\d{2}[年./-]\d{1,2}(?:[月./-]\d{1,2}日?)?)|20\d{2}-\d{1,2}-\d{1,2})/)?.[1],
+      entry.match(/(?:有效期|保质期|到期(?:日)?)[：:\s]*((?:20\d{2}年\d{1,2}月(?:\d{1,2}日?)?)|(?:20\d{2}[./-]\d{1,2}[./-]\d{1,2})|(?:20\d{2}-\d{1,2}-\d{1,2}))/)?.[1],
     ),
     category: entries.map((entry) => joinKnown(categories.map(([pattern, value]) => pattern.test(entry) ? value : undefined))),
     owner_note: entries.map((entry) => entry.match(/(?:澳洲带回|国内购买|代购|网购|赠品)/)?.[0]),
