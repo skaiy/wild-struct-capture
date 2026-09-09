@@ -22,3 +22,21 @@ export type CaptureSession = {
   createdAt: string;
   shots: Shot[];
 };
+
+export type StructuredField = {
+  key: string;
+  label: string;
+  value: string;
+  confidence: "high" | "medium";
+};
+
+export type OrganizedCapture = {
+  id: string;
+  sessionId: string;
+  schemaId: SchemaId;
+  status: "pending_hitl" | "approved" | "rejected";
+  fields: StructuredField[];
+  gallery: Shot[];
+  createdAt: string;
+  rejectionReason?: string;
+};

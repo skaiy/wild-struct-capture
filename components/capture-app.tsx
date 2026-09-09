@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Camera, CheckCircle2, ChevronRight, ClipboardList, Sparkles } from "lucide-react";
 import { schemas, getSchema } from "@/lib/schemas";
 import { LocalStorageProvider } from "@/lib/storage";
-import type { CaptureSession, SchemaId, Shot } from "@/lib/types";
+import type { CaptureSession, OrganizedCapture, SchemaId, Shot } from "@/lib/types";
 import { createWaoClient } from "@/lib/wao-client";
+import { OrganizeResult } from "@/components/organize-result";
 
 const makeId = () => crypto.randomUUID();
 
@@ -15,6 +16,7 @@ export function CaptureApp() {
   const [caption, setCaption] = useState("");
   const [direction, setDirection] = useState("");
   const [message, setMessage] = useState("");
+  const [organized, setOrganized] = useState<OrganizedCapture | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const storage = useMemo(() => new LocalStorageProvider(), []);
   const wao = useMemo(() => createWaoClient(), []);
@@ -55,9 +57,12 @@ export function CaptureApp() {
 
   async function organize() {
     if (!session) return;
-    const result = await wao.organize(session.id).catch(() => ({ status: "stubbed" as const }));
-    setMessage(result.status === "queued" ? "已提交给 Wild AgentOS 整理。" : "整理入口已预留；开发模式下不会直接调用 VL。");
+    const result = await wao.organize(session, shots).catch(() => null);
+    if (!result) return setMessage("整理请求失败，请稍后重试。");
+    setOrganized(result);
   }
+
+  if (organized) return <OrganizeResult initial={organized} wao={wao} onBack={() => setOrganized(null)} />;
 
   if (!session) {
     return (
