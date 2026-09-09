@@ -9,5 +9,5 @@ export async function POST(request: Request) {
   }
   const session = getSession(body.session.id);
   if (!session) return NextResponse.json({ error: "会话不存在" }, { status: 404 });
-  return NextResponse.json(extract(session, body.shots));
+  return NextResponse.json(await extract(session, body.shots));
 }

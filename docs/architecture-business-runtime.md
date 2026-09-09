@@ -46,6 +46,12 @@ LocalStorage   会话/HITL/结果          资产版本/任务          模型�
 5. BFF 保存整理结果，返回 `pending_hitl`。
 6. PWA 调用 BFF 的 approve/reject；BFF 更新权威 HITL 状态。仅 `approved` 可导出。
 
+## M5：可选通用 Agent 增强
+
+`extract` 与 `organize` 先同步构建本地知识包字段。若 `WAO_BASE_URL` 存在，BFF 会先探测 `${WAO_BASE_URL}/health`，再最佳努力调用通用 `POST /api/v1/agents/${WAO_STRUCTCAPTURE_AGENT_ID:-structcapture-organizer}/chat`。提示词包含当前 pack 的提取规则、允许字段和照片 caption/direction；POC 的 `imageUrl` 仅是引用，不能假定 WAO 已下载或读取图片。
+
+WAO 的结构化回答只能替换摘要并补充当前 pack 中定义的键，不能改变 `schema`、`shot_count`、`pending_hitl` 或任何业务状态。未配置地址、健康检查失败、Agent 不存在、超时、非成功响应或无法解析的回答都返回 `null` 增强，BFF 继续保存本地结果。因此该调用既不要求 WAO 可用，也不引入 WAO `/sessions` 或 `/captures/*` 路由。
+
 ## 禁止实践
 
 - 不给 WAO core 添加拍录业务 API、会话表或 HITL 工作流。
