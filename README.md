@@ -27,7 +27,7 @@ PWA shell → WaoClient → /api/wao gateway → HTTP WAO (optional) → Wild Ag
        └→ LocalStorageProvider (device-side capture resilience)
 ```
 
-`WAO_BASE_URL` 配置仅服务端可见的 WAO HTTP 端点。演示目标为 `http://198.12.81.152:8088`；浏览器只调用同源 `/api/wao` 网关，端点不可用或未配置时，`WaoClient` 自动回退到 `DevStub`，所以无需云数据库即可试用拍录流程。
+`WAO_BASE_URL` 配置仅服务端可见的 WAO HTTP 端点。演示目标为 `http://198.12.81.152:8088`；浏览器只调用同源 `/api/wao` 网关，端点不可用或未配置时，`WaoClient` 自动回退到 `DevStub`，所以无需云数据库即可试用拍录流程。通过 `curl --fail http://198.12.81.152:8088/health` 检查演示端点；完整的 Vercel 变量设置和可选 Caddy `/wao` 反代见 [部署指南](docs/vercel-hobby-deploy.md)。
 
 部署采用免费的 **Vercel Hobby** 托管该 Next.js PWA；WAO 服务可部署在 VPS 的 `:8088`。跨域部署时，VPS 必须只允许预期的 Vercel 来源并启用 HTTPS；不要把密钥或生产地址提交进仓库。仓库只提供 `.env.example`。
 
@@ -36,6 +36,11 @@ PWA shell → WaoClient → /api/wao gateway → HTTP WAO (optional) → Wild Ag
 - Android Chrome：菜单 →「安装应用」或「添加到主屏幕」。
 - iOS Safari：分享 →「加入主屏幕」。iOS 对后台同步、推送和存储回收的支持与 Chromium 不同；离线记录应在恢复网络后确认同步状态。
 - 本项目提供 standalone manifest、应用图标和基础缓存 service worker。生产安装与相机访问需要 HTTPS（localhost 除外）。
+
+## 交付与演示资料
+
+- [Vercel Hobby 部署、环境变量与手机安装清单](docs/vercel-hobby-deploy.md)
+- [客户演示脚本（中文，碰撞实验与家庭盘点）](docs/customer-demo-zh.md)
 
 ## License
 
