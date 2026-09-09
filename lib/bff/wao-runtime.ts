@@ -220,9 +220,15 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
     direction,
     hasImage: Boolean(imageUrl),
   }));
+  const fieldGuidance = pack.schema.fields.map(({ key, enum: enumValues, options, synonyms }) => ({
+    key,
+    ...(enumValues?.length || options?.length ? { options: enumValues ?? options } : {}),
+    ...(synonyms && Object.keys(synonyms).length ? { synonyms } : {}),
+  }));
   return [
     "从证据提取知识包字段，输出可供人工确认的 JSON；不得推断。",
     `知识包=${pack.id}；字段标签=${JSON.stringify(pack.labels)}；规则=${pack.extractionRules.join("；")}`,
+    `字段选项与同义词=${JSON.stringify(fieldGuidance)}。有明确匹配时使用选项中的规范标签；没有匹配时保留证据原文并将 confidence 设为 medium，不得用“待确认”覆盖已有证据。`,
     `仅允许 summary、items 和 ${pack.schema.fields.map((field) => field.key).join("、")}。每个 tangible item 必须是一条独立 items 记录，未知写“待确认”。`,
     "绝不可把多件物品合并为使用“；”分隔的字段值。每个 item 的 fields 只描述该物品；galleryShotIds 填关联的拍摄记录编号（从 1 开始）。",
     "只返回 JSON，不要 Markdown：",
@@ -280,26 +286,35 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): 
     if (field) fields[key] = field;
   }
   const items = Array.isArray(record.items)
-    ? record.items.flatMap((rawItem) => {
-      if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return [];
-      const rawFields = (rawItem as Record<string, unknown>).fields;
-      if (!rawFields || typeof rawFields !== "object" || Array.isArray(rawFields)) return [];
-      const itemFields: WaoEnrichment["fields"] = {};
-      for (const [key, rawField] of Object.entries(rawFields)) {
-        if (!allowedKeys.has(key)) continue;
-        const field = parseEnrichmentField(rawField, shots);
-        if (field) itemFields[key] = field;
-      }
-      if (!Object.keys(itemFields).length) return [];
-      const rawShotIds = (rawItem as Record<string, unknown>).galleryShotIds;
-      const galleryShotIds = Array.isArray(rawShotIds)
-        ? rawShotIds.map(String).filter((id) => /^\d+$/.test(id) && Number(id) <= shots.length)
-        : undefined;
-      return [{ fields: itemFields, galleryShotIds }];
-    })
+    ? record.items.flatMap((rawItem) => parseEnrichmentItem(rawItem, allowedKeys, shots))
     : undefined;
   const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined;
   return summary || Object.keys(fields).length || items?.length ? { summary, fields, items } : null;
+}
+
+function parseEnrichmentItem(
+  rawItem: unknown,
+  allowedKeys: Set<string>,
+  shots: Shot[],
+): NonNullable<WaoEnrichment["items"]> {
+  if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return [];
+  const item = rawItem as Record<string, unknown>;
+  // Support both the documented items[].fields shape and agents that put
+  // schema keys directly on each item object.
+  const rawFields = item.fields && typeof item.fields === "object" && !Array.isArray(item.fields)
+    ? item.fields as Record<string, unknown>
+    : item;
+  const itemFields: WaoEnrichment["fields"] = {};
+  for (const [key, rawField] of Object.entries(rawFields)) {
+    if (!allowedKeys.has(key)) continue;
+    const field = parseEnrichmentField(rawField, shots);
+    if (field) itemFields[key] = field;
+  }
+  if (!Object.keys(itemFields).length) return [];
+  const galleryShotIds = Array.isArray(item.galleryShotIds)
+    ? item.galleryShotIds.map(String).filter((id) => /^\d+$/.test(id) && Number(id) <= shots.length)
+    : undefined;
+  return [{ fields: itemFields, galleryShotIds }];
 }
 
 function parseEnrichmentField(rawField: unknown, shots: Shot[]): WaoEnrichment["fields"][string] | null {
