@@ -37,14 +37,39 @@ export class DevStubWaoClient implements WaoClient {
 
   async extract(session: CaptureSession, shots: Shot[]) {
     const schemaLabel = session.schemaId === "crash-prep" ? "碰撞实验准备" : "家庭物品盘点";
-    const fields = [
+    const metaFields = [
       { key: "schema", label: "记录模板", value: schemaLabel, confidence: "high" as const },
       { key: "shot_count", label: "已记录照片", value: `${shots.length} 张`, confidence: "high" as const },
       { key: "summary", label: "现场摘要", value: shots.map((shot) => shot.caption).filter(Boolean).join("；") || "等待补充照片说明", confidence: "medium" as const },
     ];
     return {
       id: newId(), sessionId: session.id, schemaId: session.schemaId, status: "pending_hitl" as const,
-      fields, gallery: shots, createdAt: new Date().toISOString(),
+      metaFields,
+      items: [{
+        id: newId(),
+        fields: session.schemaId === "crash-prep"
+          ? [
+            { key: "scene_location", label: "试验地点", value: "待确认", confidence: "low" as const },
+            { key: "vehicle_direction", label: "车辆方向", value: "待确认", confidence: "low" as const, options: ["正前", "正后", "左侧", "右侧", "前左45°", "前右45°", "后左45°", "后右45°"] },
+            { key: "safety_equipment", label: "安全设备", value: "待确认", confidence: "low" as const },
+            { key: "vehicle_condition", label: "车辆状态", value: "待确认", confidence: "low" as const },
+            { key: "evidence_notes", label: "证据说明", value: "待确认", confidence: "low" as const },
+          ]
+          : [
+            { key: "item_name", label: "物品名称", value: "待确认", confidence: "low" as const },
+            { key: "location", label: "存放位置", value: "待确认", confidence: "low" as const, options: ["客厅", "卧室", "厨房", "卫生间", "阳台", "储物间", "玄关", "车库", "药箱", "冰箱", "厨房柜", "浴室柜", "衣柜", "抽屉", "书架"] },
+            { key: "condition", label: "物品状态", value: "待确认", confidence: "low" as const, options: ["全新", "未开封", "已开封", "完好", "临期", "过期", "破损", "潮湿", "污损"] },
+            { key: "quantity", label: "数量", value: "待确认", confidence: "low" as const },
+            { key: "brand", label: "品牌", value: "待确认", confidence: "low" as const },
+            { key: "specification", label: "规格", value: "待确认", confidence: "low" as const },
+            { key: "expiry_date", label: "保质期/有效期", value: "待确认", confidence: "low" as const },
+            { key: "category", label: "品类", value: "待确认", confidence: "low" as const, options: ["食品", "药品", "护理", "清洁用品", "衣物", "数码", "工具", "文具", "其他"] },
+            { key: "owner_note", label: "来源/备注", value: "待确认", confidence: "low" as const },
+            { key: "unit_price", label: "单价", value: "待确认", confidence: "low" as const },
+          ],
+        galleryShotIds: shots.map((shot) => shot.id),
+      }],
+      gallery: shots, createdAt: new Date().toISOString(),
     };
   }
 

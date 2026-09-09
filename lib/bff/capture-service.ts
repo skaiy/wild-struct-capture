@@ -1,6 +1,6 @@
 import crashPrepPack from "@/docs/runtime-assets/crash-prep.knowledge-pack.json";
 import homeInventoryPack from "@/docs/runtime-assets/home-inventory.knowledge-pack.json";
-import type { CaptureSession, OrganizedCapture, SchemaId, Shot, StructuredField } from "@/lib/types";
+import type { CaptureSession, OrganizedCapture, OrganizedItem, SchemaId, Shot, StructuredField } from "@/lib/types";
 import { captureStore } from "@/lib/bff/capture-store";
 import { enrichWithModelGateway, enrichWithWaoAgent, type WaoEnrichment } from "@/lib/bff/wao-runtime";
 
@@ -8,7 +8,7 @@ export type KnowledgePack = {
   id: string;
   labels: Record<string, string>;
   extractionRules: string[];
-  schema: { fields: Array<{ key: string }> };
+  schema: { fields: Array<{ key: string; enum?: string[]; options?: string[]; synonyms?: Record<string, string[]> }> };
 };
 
 const knowledgePacks: Record<SchemaId, KnowledgePack> = {
@@ -214,6 +214,75 @@ function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichme
   return output;
 }
 
+function enumOptions(schemaId: SchemaId, key: string) {
+  const definition = knowledgePacks[schemaId].schema.fields.find((field) => field.key === key);
+  return definition?.enum ?? definition?.options;
+}
+
+function normalizeEnum(schemaId: SchemaId, key: string, value: string, confidence: StructuredField["confidence"]): StructuredField {
+  const definition = knowledgePacks[schemaId].schema.fields.find((field) => field.key === key);
+  const options = definition?.enum ?? definition?.options;
+  if (!options?.length) return { key, label: knowledgePacks[schemaId].labels[key] ?? key, value, confidence };
+  const candidate = value.trim().toLocaleLowerCase("zh-CN");
+  const matched = options.find((option) =>
+    option.toLocaleLowerCase("zh-CN") === candidate ||
+    definition?.synonyms?.[option]?.some((synonym) => synonym.toLocaleLowerCase("zh-CN") === candidate),
+  );
+  return {
+    key,
+    label: knowledgePacks[schemaId].labels[key] ?? key,
+    value: matched ?? UNCONFIRMED,
+    confidence: matched ? confidence : "low",
+    options,
+  };
+}
+
+function completeItemFields(
+  schemaId: SchemaId,
+  values: Record<string, { value: string; confidence: "high" | "medium" | "low" } | undefined>,
+) {
+  return knowledgePacks[schemaId].schema.fields.map(({ key }) => {
+    const source = values[key];
+    return normalizeEnum(schemaId, key, source?.value?.trim() || UNCONFIRMED, source?.confidence ?? "low");
+  });
+}
+
+function buildItems(schemaId: SchemaId, shots: Shot[], enrichment: WaoEnrichment | null): OrganizedItem[] {
+  if (enrichment?.items?.length) {
+    return enrichment.items.map((item) => ({
+      id: crypto.randomUUID(),
+      fields: completeItemFields(schemaId, item.fields),
+      galleryShotIds: (item.galleryShotIds ?? []).map((index) => shots[Number(index) - 1]?.id).filter((id): id is string => Boolean(id)),
+    }));
+  }
+
+  // Compatibility path for PR #28's flat WAO response. Convert aligned legacy
+  // values into independent cards rather than preserving semicolon-packed fields.
+  const merged = mergeEnrichment(schemaId, buildFields(schemaId, shots), enrichment);
+  const domainFields = merged.filter((field) => knowledgePacks[schemaId].schema.fields.some(({ key }) => key === field.key));
+  const count = Math.max(1, ...domainFields.map((field) => field.value.split("；").length));
+  return Array.from({ length: count }, (_, index) => ({
+    id: crypto.randomUUID(),
+    fields: completeItemFields(schemaId, Object.fromEntries(domainFields.map((field) => [
+      field.key,
+      { value: field.value.split("；")[index]?.trim() || UNCONFIRMED, confidence: field.confidence },
+    ]))),
+    galleryShotIds: count === 1 ? shots.map((shot) => shot.id) : shots[index] ? [shots[index].id] : [],
+  }));
+}
+
+function normalizeHitlItems(schemaId: SchemaId, items: OrganizedItem[], gallery: Shot[]) {
+  const galleryIds = new Set(gallery.map((shot) => shot.id));
+  return items.map((item) => ({
+    id: item.id,
+    fields: completeItemFields(schemaId, Object.fromEntries(item.fields.map((field) => [
+      field.key,
+      { value: field.value, confidence: field.confidence },
+    ]))),
+    galleryShotIds: item.galleryShotIds.filter((id) => galleryIds.has(id)),
+  }));
+}
+
 /**
  * The local path deliberately derives structured output from versioned runtime
  * asset data. Generic WAO enrichment is best-effort and never uses
@@ -232,7 +301,17 @@ export async function extract(session: CaptureSession, shots: Shot[]): Promise<O
     sessionId: session.id,
     schemaId: session.schemaId,
     status: "pending_hitl",
-    fields: mergeEnrichment(session.schemaId, buildFields(session.schemaId, shots), enrichment),
+    metaFields: [
+      { key: "schema", label: "记录模板", value: pack.labels.template, confidence: "high" },
+      { key: "shot_count", label: pack.labels.shotCount, value: `${shots.length} 张`, confidence: "high" },
+      {
+        key: "summary",
+        label: pack.labels.summary,
+        value: enrichment?.summary ?? valueFromShots(shots),
+        confidence: enrichment?.summary ? "medium" : shots.length ? "medium" : "low",
+      },
+    ],
+    items: buildItems(session.schemaId, shots, enrichment),
     gallery: shots,
     createdAt: new Date().toISOString(),
   });
@@ -247,12 +326,14 @@ export function updateHitl(
   status: "approved" | "rejected",
   reason?: string,
   fallbackCapture?: OrganizedCapture,
+  items?: OrganizedItem[],
 ) {
   const capture = captureStore.getCapture(captureId) ??
     (fallbackCapture?.id === captureId ? fallbackCapture : undefined);
   if (!capture) return undefined;
   return captureStore.saveCapture({
     ...capture,
+    ...(items ? { items: normalizeHitlItems(capture.schemaId, items, capture.gallery) } : {}),
     status,
     ...(status === "rejected" ? { rejectionReason: reason } : {}),
   });

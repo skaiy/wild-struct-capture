@@ -1,9 +1,25 @@
 {
   "id": "crash-prep",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "schema": {
     "fields": [
       { "key": "scene_location", "type": "string", "required": true },
+      {
+        "key": "vehicle_direction",
+        "type": "string",
+        "required": true,
+        "enum": ["正前", "正后", "左侧", "右侧", "前左45°", "前右45°", "后左45°", "后右45°"],
+        "synonyms": {
+          "正前": ["正前方", "车头", "前方"],
+          "正后": ["正后方", "车尾", "后方"],
+          "左侧": ["左边"],
+          "右侧": ["右边"],
+          "前左45°": ["左前45°", "左前方45度", "前左45度", "左前斜"],
+          "前右45°": ["右前45°", "右前方45度", "前右45度", "右前斜"],
+          "后左45°": ["左后45°", "左后方45度", "后左45度", "左后斜"],
+          "后右45°": ["右后45°", "右后方45度", "后右45度", "右后斜"]
+        }
+      },
       { "key": "safety_equipment", "type": "string", "required": true },
       { "key": "vehicle_condition", "type": "string", "required": false },
       { "key": "evidence_notes", "type": "string", "required": false }
@@ -12,6 +28,7 @@
   "extractionRules": [
     "仅根据照片说明和可见证据提取；不可推测未出现的事实。",
     "安全设备、人员隔离和试验区域必须优先记录。",
+    "车辆方向（拍摄角度）必须从固定枚举中选择；证据未匹配时标记为待确认，不应编造。",
     "缺少证据的字段标记为待确认，不应编造。"
   ],
   "labels": {
@@ -19,6 +36,7 @@
     "shotCount": "已记录照片",
     "summary": "现场摘要",
     "scene_location": "试验地点",
+    "vehicle_direction": "车辆方向",
     "safety_equipment": "安全设备",
     "vehicle_condition": "车辆状态",
     "evidence_notes": "证据说明"

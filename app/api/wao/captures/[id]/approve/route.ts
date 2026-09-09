@@ -6,7 +6,7 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, { params }: Context) {
   const body = await request.json().catch(() => null) as { capture?: OrganizedCapture } | null;
-  const capture = updateHitl((await params).id, "approved", undefined, body?.capture);
+  const capture = updateHitl((await params).id, "approved", undefined, body?.capture, body?.capture?.items);
   return capture
     ? NextResponse.json(capture)
     : NextResponse.json({ error: "整理结果不存在" }, { status: 404 });
