@@ -214,26 +214,36 @@ function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichme
   return output;
 }
 
-function enumOptions(schemaId: SchemaId, key: string) {
-  const definition = knowledgePacks[schemaId].schema.fields.find((field) => field.key === key);
-  return definition?.enum ?? definition?.options;
-}
-
 function normalizeEnum(schemaId: SchemaId, key: string, value: string, confidence: StructuredField["confidence"]): StructuredField {
   const definition = knowledgePacks[schemaId].schema.fields.find((field) => field.key === key);
   const options = definition?.enum ?? definition?.options;
   if (!options?.length) return { key, label: knowledgePacks[schemaId].labels[key] ?? key, value, confidence };
   const candidate = value.trim().toLocaleLowerCase("zh-CN");
-  const matched = options.find((option) =>
-    option.toLocaleLowerCase("zh-CN") === candidate ||
-    definition?.synonyms?.[option]?.some((synonym) => synonym.toLocaleLowerCase("zh-CN") === candidate),
-  );
+  const normalizedOptions = options.map((option) => ({
+    option,
+    aliases: [option, ...(definition?.synonyms?.[option] ?? [])],
+  }));
+  const matched = normalizedOptions.find(({ aliases }) =>
+    aliases.some((alias) => alias.toLocaleLowerCase("zh-CN") === candidate),
+  )?.option ?? normalizedOptions
+    .flatMap(({ option, aliases }) => aliases.map((alias) => ({ option, alias })))
+    .sort((left, right) => right.alias.length - left.alias.length)
+    .find(({ alias }) => {
+      const normalizedAlias = alias.toLocaleLowerCase("zh-CN");
+      // A label embedded in a more specific place/category description is a
+      // safe canonicalization (for example, 厨房台面 -> 厨房). Do not use fuzzy
+      // matching: evidence that cannot be mapped remains visible to the reviewer.
+      return normalizedAlias.length >= 2 && candidate.includes(normalizedAlias);
+    })?.option;
+  const normalizedValue = matched ?? value.trim();
   return {
     key,
     label: knowledgePacks[schemaId].labels[key] ?? key,
-    value: matched ?? UNCONFIRMED,
-    confidence: matched ? confidence : "low",
-    options,
+    value: normalizedValue,
+    confidence: matched ? confidence : normalizedValue === UNCONFIRMED ? "low" : "low",
+    // Preserve unrecognized evidence as a selectable value so the HITL control
+    // remains usable while retaining the canonical choices.
+    options: matched || normalizedValue === UNCONFIRMED ? options : [normalizedValue, ...options],
   };
 }
 
