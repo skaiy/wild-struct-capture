@@ -265,16 +265,35 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): 
   if (inputFields && typeof inputFields === "object" && !Array.isArray(inputFields)) {
     for (const [key, rawField] of Object.entries(inputFields)) {
       if (!allowedKeys.has(key)) continue;
-      const raw: Record<string, unknown> =
-        typeof rawField === "object" && rawField ? rawField as Record<string, unknown> : { value: rawField };
-      const value = typeof raw.value === "string" ? raw.value.trim() : "";
-      if (value && !isTranscriptDump(value, shots)) {
-        fields[key] = { value, confidence: raw.confidence === "high" ? "high" : "medium" };
-      }
+      const field = parseEnrichmentField(rawField, shots);
+      if (field) fields[key] = field;
     }
+  }
+  // WAO Agents can return the schema fields directly at the top level rather
+  // than under `fields`. Preserve nested fields when both forms are present.
+  for (const [key, rawField] of Object.entries(record)) {
+    if (!allowedKeys.has(key) || fields[key]) continue;
+    const field = parseEnrichmentField(rawField, shots);
+    if (field) fields[key] = field;
   }
   const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined;
   return summary || Object.keys(fields).length ? { summary, fields } : null;
+}
+
+function parseEnrichmentField(rawField: unknown, shots: Shot[]): WaoEnrichment["fields"][string] | null {
+  const raw =
+    rawField && typeof rawField === "object" && !Array.isArray(rawField)
+      ? rawField as Record<string, unknown>
+      : { value: rawField };
+  const rawValue = raw.value;
+  if (typeof rawValue !== "string" && typeof rawValue !== "number" && typeof rawValue !== "boolean") {
+    return null;
+  }
+  const value = String(rawValue).trim();
+  if (!value || isTranscriptDump(value, shots)) {
+    return null;
+  }
+  return { value, confidence: raw.confidence === "high" ? "high" : "medium" };
 }
 
 function isTranscriptDump(value: string, shots: Shot[]) {
