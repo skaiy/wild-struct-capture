@@ -14,9 +14,9 @@ export type WaoEnrichment = {
 
 function requestTimeout() {
   const parsed = Number(process.env.STRUCTCAPTURE_LLM_TIMEOUT_MS);
-  // Keep the local default responsive, while allowing slower remote model gateways
-  // up to one minute. Calls remain best-effort and fall back to placeholder fields.
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 60_000) : 15_000;
+  // Enrichment is optional: preserve a responsive pending-HITL response even when
+  // a remote model is slow or unavailable.
+  return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 10_000) : 8_000;
 }
 
 function chatCompletionsUrl() {
