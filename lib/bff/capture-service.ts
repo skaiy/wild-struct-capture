@@ -2,7 +2,7 @@ import crashPrepPack from "@/docs/runtime-assets/crash-prep.knowledge-pack.json"
 import homeInventoryPack from "@/docs/runtime-assets/home-inventory.knowledge-pack.json";
 import type { CaptureSession, OrganizedCapture, SchemaId, Shot, StructuredField } from "@/lib/types";
 import { captureStore } from "@/lib/bff/capture-store";
-import { enrichWithWao, type WaoEnrichment } from "@/lib/bff/wao-runtime";
+import { enrichWithModelGateway, type WaoEnrichment } from "@/lib/bff/wao-runtime";
 
 export type KnowledgePack = {
   id: string;
@@ -92,7 +92,7 @@ function mergeEnrichment(schemaId: SchemaId, fields: StructuredField[], enrichme
  * capture-specific WAO APIs.
  */
 export async function extract(session: CaptureSession, shots: Shot[]): Promise<OrganizedCapture> {
-  const enrichment = await enrichWithWao(knowledgePacks[session.schemaId], shots);
+  const enrichment = await enrichWithModelGateway(knowledgePacks[session.schemaId], shots);
   return captureStore.saveCapture({
     id: crypto.randomUUID(),
     sessionId: session.id,

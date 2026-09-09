@@ -13,16 +13,18 @@ export type WaoEnrichment = {
 };
 
 function requestTimeout() {
-  const parsed = Number(process.env.WAO_REQUEST_TIMEOUT_MS);
+  const parsed = Number(process.env.STRUCTCAPTURE_LLM_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 15_000) : 5_000;
 }
 
-function waoBaseUrl() {
-  const value = process.env.WAO_BASE_URL?.trim();
-  if (!value) return null;
+function chatCompletionsUrl() {
+  const value = process.env.STRUCTCAPTURE_LLM_BASE_URL?.trim();
+  if (!value || !process.env.STRUCTCAPTURE_LLM_API_KEY?.trim()) return null;
   try {
     const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString().replace(/\/$/, "") : null;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    url.pathname = `${url.pathname.replace(/\/$/, "").replace(/\/v1$/, "")}/v1/chat/completions`;
+    return url.toString();
   } catch {
     return null;
   }
@@ -36,9 +38,10 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
     imageUrl,
   }));
   return [
-    "你是 StructCapture 的结构化整理助手。仅根据给出的照片说明、方向和可见证据提出待审核建议；不得把推断写成事实。",
+    "仅根据给出的照片说明、方向和可见证据提出待人工审核的建议；不得把推断写成事实。",
     `知识包：${pack.id}`,
-    `规则：${pack.extractionRules.join("；")}`,
+    `字段标签：${JSON.stringify(pack.labels)}`,
+    `提取规则：${pack.extractionRules.join("；")}`,
     `允许字段：summary、${pack.schema.fields.map((field) => field.key).join("、")}`,
     "以 JSON 对象返回，不要 Markdown：",
     '{"summary":"string","fields":{"field_key":{"value":"string","confidence":"high|medium"}}}',
@@ -91,23 +94,27 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack): WaoEnrichment |
 }
 
 /**
- * WAO is optional infrastructure. This only uses its generic Agent chat API;
- * capture business data and HITL state remain in this BFF.
+ * The model gateway is optional. This BFF does not call WAO's domain-specific
+ * Agent chat; it only sends a prompt to a separately configured OpenAI-compatible
+ * endpoint. Capture business data and HITL state remain in this BFF.
  */
-export async function enrichWithWao(pack: KnowledgePack, shots: Shot[]): Promise<WaoEnrichment | null> {
-  const baseUrl = waoBaseUrl();
-  if (!baseUrl) return null;
+export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[]): Promise<WaoEnrichment | null> {
+  const endpoint = chatCompletionsUrl();
+  const apiKey = process.env.STRUCTCAPTURE_LLM_API_KEY?.trim();
+  if (!endpoint || !apiKey) return null;
 
   try {
-    const signal = AbortSignal.timeout(requestTimeout());
-    const health = await fetch(`${baseUrl}/health`, { cache: "no-store", signal });
-    if (!health.ok) return null;
-
-    const agentId = process.env.WAO_STRUCTCAPTURE_AGENT_ID?.trim() || "structcapture-organizer";
-    const response = await fetch(`${baseUrl}/api/v1/agents/${encodeURIComponent(agentId)}/chat`, {
+    const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: buildPrompt(pack, shots) }),
+      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: process.env.STRUCTCAPTURE_LLM_MODEL?.trim() || "deepseek-v4-flash",
+        messages: [
+          { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON。" },
+          { role: "user", content: buildPrompt(pack, shots) },
+        ],
+        temperature: 0.1,
+      }),
       cache: "no-store",
       signal: AbortSignal.timeout(requestTimeout()),
     });
