@@ -49,7 +49,7 @@ async function compressDataUrl(url: string, limits: VisionLimits) {
   const input = decodeImageDataUrl(url);
   let edge = limits.maxEdgePx;
 
-  while (edge >= 320) {
+  while (edge >= 128) {
     for (let quality = 72; quality >= 32; quality -= 8) {
       const output = await sharp(input, { limitInputPixels: 40_000_000 })
         .rotate()
