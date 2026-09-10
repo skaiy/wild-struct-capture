@@ -1,5 +1,5 @@
-const CACHE = "wild-struct-capture-v1";
-const ASSETS = ["/", "/manifest.webmanifest", "/icons/icon-192.svg", "/icons/icon-512.svg"];
+const CACHE = "wild-struct-capture-v2";
+const ASSETS = ["/manifest.webmanifest", "/icons/icon-192.svg", "/icons/icon-512.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));
