@@ -290,10 +290,7 @@ export async function enrichWithWaoAgent(
       if (images?.urls.length) {
         throw new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试。");
       }
-      console.warn("WAO Agent chat request failed", {
-        status: chatResponse?.status,
-        includeImages: Boolean(images?.urls.length),
-      });
+      console.warn("WAO Agent chat request failed", { includeImages: Boolean(images?.urls.length) });
       return null;
     }
     const enrichment = parseEnrichment(await chatResponse.json(), pack, shots);
@@ -302,7 +299,7 @@ export async function enrichWithWaoAgent(
     }
     return enrichment;
   } catch (error) {
-    if (error instanceof VisionEnrichmentError) throw error;
+    if (error instanceof EnrichmentError) throw error;
     if (visionRequested) throw visionFailureFromError(error);
     console.warn("WAO Agent path is unavailable");
     return null;
