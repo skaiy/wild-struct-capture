@@ -160,8 +160,19 @@ export function CaptureApp() {
     try {
       const result = await wao.organize(session, shots);
       setOrganized(result);
-    } catch {
-      setOrganizeError("整理请求没有完成，请检查网络后重试。已拍录的内容仍保存在此设备。");
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? (error as { code?: unknown }).code
+        : undefined;
+      setOrganizeError(
+        code === "vision_mount_unavailable"
+          ? "图片识别尚未就绪：WAO Agent 未挂载视觉模型。请联系管理员配置后再试；已拍录内容仍保存在此设备。"
+          : code === "vision_payload_too_large"
+            ? "图片请求过大，请减少照片或降低图片大小后重试。已拍录内容仍保存在此设备。"
+            : error instanceof Error
+              ? `${error.message} 已拍录的内容仍保存在此设备。`
+              : "整理请求没有完成，请检查网络后重试。已拍录的内容仍保存在此设备。",
+      );
     } finally {
       setIsOrganizing(false);
     }
