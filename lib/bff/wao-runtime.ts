@@ -19,6 +19,7 @@ export type WaoEnrichment = {
 export type EnrichmentFailureCode =
   | "vision_timeout"
   | "vision_payload_too_large"
+  | "vision_mount_unavailable"
   | "vision_unavailable"
   | "wao_timeout"
   | "wao_unavailable"
@@ -44,11 +45,43 @@ export class VisionEnrichmentError extends EnrichmentError {
   }
 }
 
-function visionFailureFromResponse(response: Response): VisionEnrichmentError {
-  if (response.status === 413) {
+async function enrichmentFailureFromWaoResponse(response: Response): Promise<EnrichmentError> {
+  const payload = await response.json().catch(() => null);
+  const error = waoErrorFromPayload(payload);
+
+  if (error?.code === "vision_mount_unavailable") {
+    return new VisionEnrichmentError(
+      "vision_mount_unavailable",
+      "图片识别未就绪：WAO Agent 未挂载视觉模型。请联系管理员配置 model_mounts.vision 后重试。",
+    );
+  }
+  if (error?.code === "vision_payload_too_large" || response.status === 413) {
     return new VisionEnrichmentError("vision_payload_too_large", "图片请求过大，请减少照片或降低图片大小后重试。");
   }
-  return new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+  if (error?.code === "vision_timeout") {
+    return new VisionEnrichmentError("vision_timeout", "图片识别超时，请稍后重试。");
+  }
+  if (error?.code?.startsWith("vision_")) {
+    return new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试。");
+  }
+  if (error?.code?.startsWith("wao_")) {
+    return new EnrichmentError("wao_unavailable", "WAO Agent 服务暂不可用，请稍后重试。");
+  }
+  return new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试。");
+}
+
+function waoErrorFromPayload(payload: unknown): { code?: string } | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.code === "string") return { code: record.code };
+  for (const key of ["error", "detail"]) {
+    const nested = record[key];
+    if (nested && typeof nested === "object") {
+      const error = waoErrorFromPayload(nested);
+      if (error) return error;
+    }
+  }
+  return null;
 }
 
 function visionFailureFromError(error: unknown): VisionEnrichmentError {
@@ -251,10 +284,11 @@ export async function enrichWithWaoAgent(
     const chatResponse = await sendWaoChat(baseUrl, agent.id, token, pack, shots, images);
     if (chatResponse instanceof VisionEnrichmentError) throw chatResponse;
     if (!chatResponse?.ok) {
+      if (chatResponse) {
+        throw await enrichmentFailureFromWaoResponse(chatResponse);
+      }
       if (images?.urls.length) {
-        throw chatResponse
-          ? visionFailureFromResponse(chatResponse)
-          : new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+        throw new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试。");
       }
       console.warn("WAO Agent chat request failed", {
         status: chatResponse?.status,
@@ -451,7 +485,7 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
     if (!response?.ok) {
       if (images?.urls.length) {
         throw response
-          ? visionFailureFromResponse(response)
+          ? await enrichmentFailureFromWaoResponse(response)
           : new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
       }
       console.warn("LLM enrichment request failed", {
