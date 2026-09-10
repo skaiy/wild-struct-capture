@@ -1,4 +1,5 @@
 import type { Shot } from "@/lib/types";
+import { prepareVisionImages, type PreparedVisionImages } from "@/lib/bff/vision";
 
 type KnowledgePack = {
   id: string;
@@ -15,14 +16,67 @@ export type WaoEnrichment = {
   items?: Array<{ fields: Record<string, WaoEnrichmentField>; galleryShotIds?: string[] }>;
 };
 
-function requestTimeout() {
+export type EnrichmentFailureCode =
+  | "vision_timeout"
+  | "vision_payload_too_large"
+  | "vision_unavailable"
+  | "wao_timeout"
+  | "wao_unavailable"
+  | "wao_invalid_response"
+  | "llm_timeout"
+  | "llm_unavailable"
+  | "llm_invalid_response";
+
+export class EnrichmentError extends Error {
+  constructor(
+    public readonly code: EnrichmentFailureCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EnrichmentError";
+  }
+}
+
+export class VisionEnrichmentError extends EnrichmentError {
+  constructor(code: Extract<EnrichmentFailureCode, `vision_${string}`>, message: string) {
+    super(code, message);
+    this.name = "VisionEnrichmentError";
+  }
+}
+
+function visionFailureFromResponse(response: Response): VisionEnrichmentError {
+  if (response.status === 413) {
+    return new VisionEnrichmentError("vision_payload_too_large", "图片请求过大，请减少照片或降低图片大小后重试。");
+  }
+  return new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+}
+
+function visionFailureFromError(error: unknown): VisionEnrichmentError {
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return new VisionEnrichmentError("vision_timeout", "图片识别超时，请稍后重试或关闭图片识别后重试。");
+  }
+  return new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+}
+
+function hasImageInput(shots: Shot[]) {
+  return shots.some((shot) => Boolean(shot.imageUrl));
+}
+
+export function isWaoVisionEnabled() {
+  return process.env.STRUCTCAPTURE_WAO_INCLUDE_IMAGES === "true";
+}
+
+export function isModelVisionEnabled() {
+  return process.env.STRUCTCAPTURE_LLM_INCLUDE_IMAGES === "true";
+}
+
+function requestTimeout(includeImages = false) {
   const parsed = Number(process.env.STRUCTCAPTURE_LLM_TIMEOUT_MS);
-  // Long Chinese multi-item transcripts need more than the old 8–10 second
-  // window. Keep this bounded for the BFF while allowing the env to tune the
-  // budget within a range proven practical for the shared model gateways.
+  // Vision models need a larger budget than text-only extraction. An explicit
+  // env value still wins so deployments can tune their gateway SLA.
   return Number.isFinite(parsed) && parsed > 0
-    ? Math.min(Math.max(parsed, 20_000), 30_000)
-    : 25_000;
+    ? Math.min(Math.max(parsed, 20_000), 120_000)
+    : includeImages ? 60_000 : 25_000;
 }
 
 function waoBaseUrl() {
@@ -73,6 +127,10 @@ function oidcConfig() {
   } catch {
     return null;
   }
+}
+
+export function isWaoConfigured() {
+  return Boolean(waoBaseUrl() && oidcConfig());
 }
 
 function decodeJwtClaims(token: string): WorkloadClaims | null {
@@ -155,7 +213,12 @@ export async function enrichWithWaoAgent(
 ): Promise<WaoEnrichment | null> {
   const baseUrl = waoBaseUrl();
   const configuredAgent = process.env.STRUCTCAPTURE_WAO_AGENT_ID?.trim() || "structcapture-organizer";
-  if (!baseUrl || !configuredAgent || !pack.id || !shots.length) return null;
+  const imagesEnabled = isWaoVisionEnabled();
+  const visionRequested = imagesEnabled && hasImageInput(shots);
+  if (!baseUrl || !configuredAgent || !pack.id || !shots.length) {
+    if (visionRequested) throw new VisionEnrichmentError("vision_unavailable", "图片识别服务未配置，请关闭图片识别后重试。");
+    return null;
+  }
 
   const signal = AbortSignal.timeout(requestTimeout());
   try {
@@ -177,25 +240,37 @@ export async function enrichWithWaoAgent(
       { tenant_id: agent.tenant_id, project_id: agent.project_id },
       signal,
     );
-    if (!token) return null;
-    const includeImages = process.env.STRUCTCAPTURE_WAO_INCLUDE_IMAGES === "true";
-    const chatResponse = await fetch(`${baseUrl}/api/v1/agents/${encodeURIComponent(agent.id)}/chat`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        message: buildPrompt(pack, shots),
-        ...(includeImages ? { images: shots.flatMap((shot) => shot.imageUrl ? [shot.imageUrl] : []) } : {}),
-      }),
-      cache: "no-store",
-      signal,
-    });
-    if (!chatResponse.ok) {
-      console.warn("WAO Agent chat request failed", { status: chatResponse.status });
+    if (!token) {
+      if (visionRequested) throw new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
       return null;
     }
-    return parseEnrichment(await chatResponse.json(), pack, shots);
-  } catch {
-    console.warn("WAO Agent path is unavailable; using model gateway fallback");
+    const images = imagesEnabled ? await prepareVisionImages(shots.map((shot) => shot.imageUrl)) : null;
+    if (imagesEnabled && hasImageInput(shots) && !images?.urls.length) {
+      throw new VisionEnrichmentError("vision_unavailable", "图片无法处理，未发起图片识别；请更换图片或关闭图片识别后重试。");
+    }
+    const chatResponse = await sendWaoChat(baseUrl, agent.id, token, pack, shots, images);
+    if (chatResponse instanceof VisionEnrichmentError) throw chatResponse;
+    if (!chatResponse?.ok) {
+      if (images?.urls.length) {
+        throw chatResponse
+          ? visionFailureFromResponse(chatResponse)
+          : new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+      }
+      console.warn("WAO Agent chat request failed", {
+        status: chatResponse?.status,
+        includeImages: Boolean(images?.urls.length),
+      });
+      return null;
+    }
+    const enrichment = parseEnrichment(await chatResponse.json(), pack, shots);
+    if (images?.urls.length && !enrichment) {
+      throw new VisionEnrichmentError("vision_unavailable", "图片识别服务未返回有效结果，请稍后重试或关闭图片识别后重试。");
+    }
+    return enrichment;
+  } catch (error) {
+    if (error instanceof VisionEnrichmentError) throw error;
+    if (visionRequested) throw visionFailureFromError(error);
+    console.warn("WAO Agent path is unavailable");
     return null;
   }
 }
@@ -213,7 +288,11 @@ function chatCompletionsUrl() {
   }
 }
 
-function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
+export function isModelGatewayConfigured() {
+  return Boolean(chatCompletionsUrl() && process.env.STRUCTCAPTURE_LLM_API_KEY?.trim());
+}
+
+function buildPrompt(pack: KnowledgePack, shots: Shot[], imageShotNumbers: number[] = []) {
   const evidence = shots.map(({ caption, direction, imageUrl }, index) => ({
     shot: index + 1,
     caption,
@@ -229,6 +308,9 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[]) {
     "从证据提取知识包字段，输出可供人工确认的 JSON；不得推断。",
     `知识包=${pack.id}；字段标签=${JSON.stringify(pack.labels)}；规则=${pack.extractionRules.join("；")}`,
     `字段选项与同义词=${JSON.stringify(fieldGuidance)}。有明确匹配时使用选项中的规范标签；没有匹配时保留证据原文并将 confidence 设为 medium，不得用“待确认”覆盖已有证据。`,
+    ...(imageShotNumbers.length
+      ? [`本请求含 ${imageShotNumbers.length} 张图像，对应 shot 编号：${imageShotNumbers.join("、")}。请先观察图中标签、包装和场景的可见证据，再结合文字说明；图文冲突时保留已有证据并降低 confidence，不得用“待确认”擦除证据。`]
+      : []),
     `仅允许 summary、items 和 ${pack.schema.fields.map((field) => field.key).join("、")}。每个 tangible item 必须是一条独立 items 记录，未知写“待确认”。`,
     "绝不可把多件物品合并为使用“；”分隔的字段值。每个 item 的 fields 只描述该物品；galleryShotIds 填关联的拍摄记录编号（从 1 开始）。",
     "只返回 JSON，不要 Markdown：",
@@ -345,50 +427,101 @@ function isTranscriptDump(value: string, shots: Shot[]) {
 }
 
 /**
- * The model gateway is optional fallback. Capture business data and HITL state
- * remain in this BFF.
+ * The model gateway is used only in explicit deployments without a configured
+ * WAO Agent. Capture business data and HITL state remain in this BFF.
  */
 export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[]): Promise<WaoEnrichment | null> {
   const endpoint = chatCompletionsUrl();
   const apiKey = process.env.STRUCTCAPTURE_LLM_API_KEY?.trim();
-  if (!endpoint || !apiKey) return null;
+  const imagesEnabled = isModelVisionEnabled();
+  const visionRequested = imagesEnabled && hasImageInput(shots);
+  if (!endpoint || !apiKey) {
+    if (visionRequested) throw new VisionEnrichmentError("vision_unavailable", "图片识别服务未配置，请关闭图片识别后重试。");
+    return null;
+  }
 
-  const includeImages = process.env.STRUCTCAPTURE_LLM_INCLUDE_IMAGES === "true";
-  const imageParts = includeImages
-    ? shots.flatMap((shot) => shot.imageUrl
-      ? [{ type: "image_url", image_url: { url: shot.imageUrl } }]
-      : [])
-    : [];
-  const prompt = buildPrompt(pack, shots);
+  const images = imagesEnabled ? await prepareVisionImages(shots.map((shot) => shot.imageUrl)) : null;
 
   try {
-    const response = await fetch(endpoint, {
+    if (imagesEnabled && hasImageInput(shots) && !images?.urls.length) {
+      throw new VisionEnrichmentError("vision_unavailable", "图片无法处理，未发起图片识别；请更换图片或关闭图片识别后重试。");
+    }
+    const response = await sendModelGatewayRequest(endpoint, apiKey, pack, shots, images);
+    if (response instanceof VisionEnrichmentError) throw response;
+    if (!response?.ok) {
+      if (images?.urls.length) {
+        throw response
+          ? visionFailureFromResponse(response)
+          : new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+      }
+      console.warn("LLM enrichment request failed", {
+        status: response?.status,
+        includeImages: Boolean(images?.urls.length),
+      });
+      return null;
+    }
+    const enrichment = parseEnrichment(await response.json(), pack, shots);
+    if (images?.urls.length && !enrichment) {
+      throw new VisionEnrichmentError("vision_unavailable", "图片识别服务未返回有效结果，请稍后重试或关闭图片识别后重试。");
+    }
+    return enrichment;
+  } catch (error) {
+    if (error instanceof VisionEnrichmentError) throw error;
+    console.warn("LLM enrichment request failed", { includeImages: Boolean(images?.urls.length) });
+    return null;
+  }
+}
+
+async function sendWaoChat(
+  baseUrl: string,
+  agentId: string,
+  token: string,
+  pack: KnowledgePack,
+  shots: Shot[],
+  images: PreparedVisionImages | null,
+) {
+  try {
+    return await fetch(`${baseUrl}/api/v1/agents/${encodeURIComponent(agentId)}/chat`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        message: buildPrompt(pack, shots, images?.shotNumbers),
+        ...(images?.urls.length ? { images: images.urls } : {}),
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(requestTimeout(Boolean(images?.urls.length))),
+    });
+  } catch (error) {
+    return images?.urls.length ? visionFailureFromError(error) : null;
+  }
+}
+
+async function sendModelGatewayRequest(
+  endpoint: string,
+  apiKey: string,
+  pack: KnowledgePack,
+  shots: Shot[],
+  images: PreparedVisionImages | null,
+) {
+  const prompt = buildPrompt(pack, shots, images?.shotNumbers);
+  const imageParts = images?.urls.map((url) => ({ type: "image_url", image_url: { url } })) ?? [];
+  try {
+    return await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: process.env.STRUCTCAPTURE_LLM_MODEL?.trim() || "deepseek-v4-flash",
         messages: [
           { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON，且严格遵守用户给出的知识包 schema。" },
-          { role: "user", content: includeImages ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
+          { role: "user", content: imageParts.length ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
         ],
         temperature: 0.1,
         max_tokens: 1_200,
       }),
       cache: "no-store",
-      signal: AbortSignal.timeout(requestTimeout()),
+      signal: AbortSignal.timeout(requestTimeout(imageParts.length > 0)),
     });
-    if (!response.ok) {
-      console.warn("LLM enrichment request failed", { status: response.status });
-      return null;
-    }
-    return parseEnrichment(await response.json(), pack, shots);
   } catch (error) {
-    const reason = error instanceof DOMException && error.name === "TimeoutError"
-      ? "timeout"
-      : error instanceof Error
-        ? error.name
-        : "unknown";
-    console.warn("LLM enrichment request failed", { reason });
-    return null;
+    return imageParts.length ? visionFailureFromError(error) : null;
   }
 }

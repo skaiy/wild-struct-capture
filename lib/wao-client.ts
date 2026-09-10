@@ -14,6 +14,16 @@ const newId = () => crypto.randomUUID();
 const REQUEST_TIMEOUT_MS = 15_000;
 const ORGANIZE_REQUEST_TIMEOUT_MS = 35_000;
 
+class CaptureApiError extends Error {
+  constructor(
+    public readonly code: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CaptureApiError";
+  }
+}
+
 export class DevStubWaoClient implements WaoClient {
   private sessions = new Map<string, CaptureSession>();
   private captures = new Map<string, OrganizedCapture>();
@@ -101,7 +111,13 @@ export class HttpWaoClient implements WaoClient {
       headers: { "content-type": "application/json", ...init?.headers },
       signal: init?.signal ?? AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) throw new Error(`WAO 请求失败 (${response.status})`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: unknown; code?: unknown } | null;
+      throw new CaptureApiError(
+        typeof payload?.code === "string" ? payload.code : undefined,
+        typeof payload?.error === "string" ? payload.error : `WAO 请求失败 (${response.status})`,
+      );
+    }
     return response.json() as Promise<T>;
   }
 
@@ -144,7 +160,8 @@ class FallbackWaoClient implements WaoClient {
   private async useFallback<T>(primary: () => Promise<T>, fallback: () => Promise<T>) {
     try {
       return await primary();
-    } catch {
+    } catch (error) {
+      if (error instanceof CaptureApiError && /^(vision|wao|llm)_/.test(error.code ?? "")) throw error;
       return fallback();
     }
   }
