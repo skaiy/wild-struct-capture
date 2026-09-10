@@ -2,7 +2,16 @@ import crashPrepPack from "@/docs/runtime-assets/crash-prep.knowledge-pack.json"
 import homeInventoryPack from "@/docs/runtime-assets/home-inventory.knowledge-pack.json";
 import type { CaptureSession, OrganizedCapture, OrganizedItem, SchemaId, Shot, StructuredField } from "@/lib/types";
 import { captureStore } from "@/lib/bff/capture-store";
-import { enrichWithModelGateway, enrichWithWaoAgent, type WaoEnrichment } from "@/lib/bff/wao-runtime";
+import {
+  EnrichmentError,
+  enrichWithModelGateway,
+  enrichWithWaoAgent,
+  isModelVisionEnabled,
+  isModelGatewayConfigured,
+  isWaoVisionEnabled,
+  isWaoConfigured,
+  type WaoEnrichment,
+} from "@/lib/bff/wao-runtime";
 
 export type KnowledgePack = {
   id: string;
@@ -294,18 +303,38 @@ function normalizeHitlItems(schemaId: SchemaId, items: OrganizedItem[], gallery:
 }
 
 /**
- * The local path deliberately derives structured output from versioned runtime
- * asset data. Generic WAO enrichment is best-effort and never uses
- * capture-specific WAO APIs.
+ * A configured WAO Agent is the ideal pipeline and fails closed. The optional
+ * model gateway is used only when WAO is not configured; local heuristics are
+ * reserved for a fully offline development setup.
  */
 export async function extract(session: CaptureSession, shots: Shot[]): Promise<OrganizedCapture> {
   // Request data is authoritative because a serverless instance may not retain
   // the in-memory session created by an earlier request.
   saveSession(session, shots);
   const pack = knowledgePacks[session.schemaId];
-  const waoEnrichment = await enrichWithWaoAgent(pack, shots);
-  const enrichment = waoEnrichment ?? await enrichWithModelGateway(pack, shots) ??
-    (session.schemaId === "home-inventory" ? homeInventoryHeuristics(shots) : null);
+  const waoConfigured = isWaoConfigured();
+  const modelConfigured = isModelGatewayConfigured();
+  const hasImageInput = shots.some((shot) => Boolean(shot.imageUrl));
+  if (hasImageInput && isWaoVisionEnabled() && !waoConfigured) {
+    throw new EnrichmentError("vision_unavailable", "WAO 图片识别服务未配置，请关闭图片识别后重试。");
+  }
+  if (hasImageInput && !waoConfigured && isModelVisionEnabled() && !modelConfigured) {
+    throw new EnrichmentError("vision_unavailable", "图片识别服务未配置，请关闭图片识别后重试。");
+  }
+  let enrichment: WaoEnrichment | null;
+  if (waoConfigured) {
+    enrichment = await enrichWithWaoAgent(pack, shots);
+    if (!enrichment) {
+      throw new EnrichmentError("wao_invalid_response", "WAO Agent 未返回有效整理结果，请稍后重试。");
+    }
+  } else if (modelConfigured) {
+    enrichment = await enrichWithModelGateway(pack, shots);
+    if (!enrichment) {
+      throw new EnrichmentError("llm_invalid_response", "模型服务未返回有效整理结果，请稍后重试。");
+    }
+  } else {
+    enrichment = session.schemaId === "home-inventory" ? homeInventoryHeuristics(shots) : null;
+  }
   return captureStore.saveCapture({
     id: crypto.randomUUID(),
     sessionId: session.id,
