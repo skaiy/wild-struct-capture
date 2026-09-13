@@ -26,6 +26,11 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 | `STRUCTCAPTURE_WAO_OIDC_ISSUER` | 与 WAO 完全相同的 OIDC issuer | 测试 issuer，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_WAO_OIDC_AUDIENCE` | 与 WAO 完全相同的 OIDC audience | 测试 audience，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_WAO_OIDC_SCOPE` | IdP 可选的 client-credentials scope | 测试 scope，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_AUTH_MODE` | 可选，设为 `hs256` 选择 HS256 workload JWT | `hs256`，或留空自动检测 secret | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_HS256_SECRET` | WAO HS256 verifier 共用的 JWT secret | 仅在服务端密钥库设置 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
+| `STRUCTCAPTURE_WAO_HS256_SUB` | 可选 workload subject | `structcapture-bff` | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_HS256_TTL_SECONDS` | 可选 token TTL，限制 300–900 秒 | `600` | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_WAO_HS256_ISSUER` / `STRUCTCAPTURE_WAO_HS256_AUDIENCE` | WAO verifier 要求时的可选 claims | 留空或与 verifier 一致 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_WAO_INCLUDE_IMAGES` | `true` 仅在 WAO vision model 可访问图片 URL 时 | 通常 `false` | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址 | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
@@ -35,7 +40,7 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 
 `STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时服务端默认 `25000` 毫秒，限制在 `20000`–`30000` 毫秒；浏览器的整理请求等待窗口更长。该范围兼顾 MiniMax 等远程模型网关的响应时间和 Vercel 函数的可用性。`STRUCTCAPTURE_LLM_INCLUDE_IMAGES` 默认关闭，保持 MiniMax 兼容的文本请求；仅在网关明确支持 `image_url` 内容块且图片地址可访问时开启。
 
-`WAO_BASE_URL` 只由服务端读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询 Agent 目录，并校验其 `structcapture/default` 隔离范围。完整配置 `STRUCTCAPTURE_WAO_OIDC_*` 后，Capture BFF 会以短期 workload access token 调用 `POST /api/v1/agents/{id}/chat`；缺少配置、token、scope 不匹配、WAO 失败或超时时，立即继续 `STRUCTCAPTURE_LLM_*` 网关及本地整理路径。
+`WAO_BASE_URL` 只由服务端读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询 Agent 目录，并校验其 `structcapture/default` 隔离范围。完整配置 OIDC 或 HS256 认证后，Capture BFF 会以短期 workload JWT 为 Agent 目录和 `POST /api/v1/agents/{id}/chat` 发送 Bearer 认证。只要 WAO 被配置，目录、认证、scope、WAO 失败或超时都会直接返回错误，绝不会降级到 `STRUCTCAPTURE_LLM_*` 或本地整理路径。
 
 ### WAO Agent chat OIDC 上线清单
 
@@ -44,7 +49,22 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 3. IdP 的 client-credentials client 必须签发短期非对称 OIDC JWT，含 `sub`、`tenant_id=structcapture`、`project_id=default`、`exp`、匹配的 `iss` 和 `aud`。tenant/project 是 IdP 绑定的 claims，不是 BFF 可提交的参数。
 4. 将 client secret 仅存入 Vercel 的服务端环境变量；不要提交 `.env.local`。默认 OAuth Basic client authentication 不兼容时，应在 IdP/WAO 边界提供兼容 token endpoint，而不是在 BFF 自签 token。
 
-原版 WAO 的 `POST /api/v1/agents/{id}/chat` 只接受 `Authorization: Bearer <JWT>`。JWT 必须由 WAO 信任的认证边界验证；请求体中的 tenant/project 字段和 `X-Identity` 都不能生成 verified isolation claims。Capture BFF 绝不配置、读取、共享 `AGENTOS_JWT_SECRET`，也绝不自签 HS256 AgentOS token。若本地 WAO 只能以 HS256 模式运行，本应用不提供绕过路径，直接回退模型网关/本地结果；生产必须使用 OIDC/JWKS。
+### WAO HS256（137 类测试环境）
+
+若 WAO 以 `AGENTOS_AUTH_MODE=hs256` 运行，在 Capture BFF 的服务端环境变量中设置：
+
+```dotenv
+WAO_BASE_URL=https://wao-test.example.internal
+STRUCTCAPTURE_WAO_AUTH_MODE=hs256
+STRUCTCAPTURE_WAO_HS256_SECRET=<same-secret-configured-in-wao>
+# 仅当 WAO verifier 强制检查时才设置：
+# STRUCTCAPTURE_WAO_HS256_ISSUER=https://capture.example.internal
+# STRUCTCAPTURE_WAO_HS256_AUDIENCE=wild-agentos
+```
+
+BFF 以 `sub=structcapture-bff`、`tenant_id=structcapture`、`project_id=default` 与 10 分钟（可调为 5–15 分钟）有效期签发 HS256 JWT。HS256 secret 与 WAO verifier 的 secret 必须一致，只能保存在双方的服务端密钥库中，绝不能使用 `NEXT_PUBLIC_` 前缀、输出日志或提交仓库。若同时存在完整的 `STRUCTCAPTURE_WAO_OIDC_*`，OIDC 优先于 HS256，保持生产演示的 OIDC/JWKS 流程不变。
+
+原版 WAO 的 Agent 目录与 `POST /api/v1/agents/{id}/chat` 均使用 `Authorization: Bearer <JWT>`。JWT 必须由 WAO 信任的认证边界验证；请求体中的 tenant/project 字段和 `X-Identity` 都不能生成 verified isolation claims。
 
 当前演示端点的健康检查：
 

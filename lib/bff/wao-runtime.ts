@@ -1,5 +1,6 @@
 import type { Shot } from "@/lib/types";
 import { prepareVisionImages, type PreparedVisionImages } from "@/lib/bff/vision";
+import { createHmac, createHash } from "node:crypto";
 
 type KnowledgePack = {
   id: string;
@@ -144,7 +145,7 @@ type WorkloadClaims = {
   aud?: unknown;
 };
 
-let cachedWorkloadToken: { token: string; expiresAt: number } | null = null;
+let cachedWorkloadToken: { token: string; expiresAt: number; cacheKey: string } | null = null;
 
 function oidcConfig() {
   const tokenUrl = process.env.STRUCTCAPTURE_WAO_OIDC_TOKEN_URL?.trim();
@@ -162,8 +163,49 @@ function oidcConfig() {
   }
 }
 
+export type Hs256Config = {
+  secret: string;
+  sub: string;
+  issuer?: string;
+  audience?: string;
+  ttlSeconds: number;
+};
+
+function hs256Config(): Hs256Config | null {
+  const mode = process.env.STRUCTCAPTURE_WAO_AUTH_MODE?.trim().toLowerCase();
+  const secret = process.env.STRUCTCAPTURE_WAO_HS256_SECRET?.trim();
+  // OIDC is selected first below. An omitted mode permits HS256 only when a
+  // secret is explicitly present, which keeps the local configuration concise.
+  if (!secret || (mode && mode !== "hs256")) return null;
+  const configuredTtl = Number(process.env.STRUCTCAPTURE_WAO_HS256_TTL_SECONDS);
+  return {
+    secret,
+    sub: process.env.STRUCTCAPTURE_WAO_HS256_SUB?.trim() || "structcapture-bff",
+    issuer: process.env.STRUCTCAPTURE_WAO_HS256_ISSUER?.trim() || undefined,
+    audience: process.env.STRUCTCAPTURE_WAO_HS256_AUDIENCE?.trim() || undefined,
+    ttlSeconds: Number.isFinite(configuredTtl) ? Math.min(Math.max(configuredTtl, 300), 900) : 600,
+  };
+}
+
+function workloadAuthConfig() {
+  // OIDC takes precedence so existing production-demo deployments are
+  // unchanged even if an HS256 secret is incidentally available.
+  const oidc = oidcConfig();
+  if (oidc) return { type: "oidc" as const, config: oidc };
+  const hs256 = hs256Config();
+  if (hs256) return { type: "hs256" as const, config: hs256 };
+  return null;
+}
+
+function workloadTokenCacheKey(auth: NonNullable<ReturnType<typeof workloadAuthConfig>>) {
+  if (auth.type === "oidc") {
+    return `oidc:${auth.config.tokenUrl}:${auth.config.clientId}:${auth.config.issuer}:${auth.config.audience}`;
+  }
+  return `hs256:${auth.config.sub}:${auth.config.issuer ?? ""}:${auth.config.audience ?? ""}:${createHash("sha256").update(auth.config.secret).digest("base64url")}`;
+}
+
 export function isWaoConfigured() {
-  return Boolean(waoBaseUrl() && oidcConfig());
+  return Boolean(waoBaseUrl() && workloadAuthConfig());
 }
 
 function decodeJwtClaims(token: string): WorkloadClaims | null {
@@ -199,15 +241,44 @@ function verifiedWorkloadToken(
   return { token, expiresAt: claims.exp * 1_000 };
 }
 
+export function mintHs256WorkloadToken(
+  config: Hs256Config,
+  agent: Pick<Required<WaoAgent>, "tenant_id" | "project_id">,
+  nowSeconds = Math.floor(Date.now() / 1_000),
+) {
+  const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const header = encode({ alg: "HS256", typ: "JWT" });
+  const claims = {
+    sub: config.sub,
+    tenant_id: agent.tenant_id,
+    project_id: agent.project_id,
+    iat: nowSeconds,
+    exp: nowSeconds + config.ttlSeconds,
+    ...(config.issuer ? { iss: config.issuer } : {}),
+    ...(config.audience ? { aud: config.audience } : {}),
+  };
+  const payload = encode(claims);
+  const signingInput = `${header}.${payload}`;
+  const signature = createHmac("sha256", config.secret).update(signingInput).digest("base64url");
+  return { token: `${signingInput}.${signature}`, expiresAt: claims.exp * 1_000 };
+}
+
 async function obtainWorkloadToken(
   agent: Pick<Required<WaoAgent>, "tenant_id" | "project_id">,
   signal: AbortSignal,
 ) {
-  const config = oidcConfig();
-  if (!config) return null;
-  if (cachedWorkloadToken && cachedWorkloadToken.expiresAt > Date.now() + 60_000) {
+  const auth = workloadAuthConfig();
+  if (!auth) return null;
+  const cacheKey = workloadTokenCacheKey(auth);
+  if (cachedWorkloadToken?.cacheKey === cacheKey && cachedWorkloadToken.expiresAt > Date.now() + 60_000) {
     return cachedWorkloadToken.token;
   }
+  if (auth.type === "hs256") {
+    const workloadToken = mintHs256WorkloadToken(auth.config, agent);
+    cachedWorkloadToken = { ...workloadToken, cacheKey };
+    return workloadToken.token;
+  }
+  const config = auth.config;
   const body = new URLSearchParams({ grant_type: "client_credentials", audience: config.audience });
   const scope = process.env.STRUCTCAPTURE_WAO_OIDC_SCOPE?.trim();
   if (scope) body.set("scope", scope);
@@ -227,7 +298,7 @@ async function obtainWorkloadToken(
     if (typeof payload.access_token !== "string") throw new Error("missing access token");
     const workloadToken = verifiedWorkloadToken(payload.access_token, agent, config);
     if (!workloadToken) throw new Error("unexpected workload token claims");
-    cachedWorkloadToken = workloadToken;
+    cachedWorkloadToken = { ...workloadToken, cacheKey };
     return workloadToken.token;
   } catch (error) {
     const reason = error instanceof DOMException && error.name === "TimeoutError" ? "timeout" : "unavailable";
@@ -255,7 +326,16 @@ export async function enrichWithWaoAgent(
 
   const signal = AbortSignal.timeout(requestTimeout());
   try {
+    const token = await obtainWorkloadToken(
+      { tenant_id: "structcapture", project_id: "default" },
+      signal,
+    );
+    if (!token) {
+      if (visionRequested) throw new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
+      return null;
+    }
     const response = await fetch(`${baseUrl}/api/v1/agents`, {
+      headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
       signal,
     });
@@ -267,14 +347,6 @@ export async function enrichWithWaoAgent(
     if (!agent?.id || agent.business_domain !== "structcapture" ||
       agent.tenant_id !== "structcapture" || agent.project_id !== "default") {
       console.warn("WAO StructCapture Agent is missing or has an unexpected scope", { configuredAgent });
-      return null;
-    }
-    const token = await obtainWorkloadToken(
-      { tenant_id: agent.tenant_id, project_id: agent.project_id },
-      signal,
-    );
-    if (!token) {
-      if (visionRequested) throw new VisionEnrichmentError("vision_unavailable", "图片识别服务暂不可用，请稍后重试或关闭图片识别后重试。");
       return null;
     }
     const images = imagesEnabled ? await prepareVisionImages(shots.map((shot) => shot.imageUrl)) : null;
