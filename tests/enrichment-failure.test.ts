@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 import { extract } from "@/lib/bff/capture-service";
-import { EnrichmentError } from "@/lib/bff/wao-runtime";
+import { EnrichmentError, isWaoConfigured, mintHs256WorkloadToken } from "@/lib/bff/wao-runtime";
 import type { CaptureSession, Shot } from "@/lib/types";
 
 const session: CaptureSession = {
@@ -51,6 +52,70 @@ async function withEnvironment(
     global.fetch = originalFetch;
   }
 }
+
+test("HS256 workload JWT contains the required scoped claims and valid signature", () => {
+  const now = 1_700_000_000;
+  const minted = mintHs256WorkloadToken({
+    secret: "test-hs256-secret",
+    sub: "structcapture-bff",
+    issuer: "https://capture.example.test",
+    audience: "wild-agentos",
+    ttlSeconds: 600,
+  }, { tenant_id: "structcapture", project_id: "default" }, now);
+  const [header, payload, signature] = minted.token.split(".");
+  assert.deepEqual(JSON.parse(Buffer.from(header, "base64url").toString("utf8")), { alg: "HS256", typ: "JWT" });
+  assert.deepEqual(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")), {
+    sub: "structcapture-bff",
+    tenant_id: "structcapture",
+    project_id: "default",
+    iat: now,
+    exp: now + 600,
+    iss: "https://capture.example.test",
+    aud: "wild-agentos",
+  });
+  assert.equal(signature, createHmac("sha256", "test-hs256-secret").update(`${header}.${payload}`).digest("base64url"));
+});
+
+test("HS256 config authenticates the Agent directory and chat without a model fallback", async () => {
+  await withEnvironment({
+    WAO_BASE_URL: "https://wao.example.test",
+    STRUCTCAPTURE_WAO_AUTH_MODE: "hs256",
+    STRUCTCAPTURE_WAO_HS256_SECRET: "test-hs256-secret",
+    STRUCTCAPTURE_WAO_OIDC_TOKEN_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_ID: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET: undefined,
+    STRUCTCAPTURE_WAO_OIDC_ISSUER: undefined,
+    STRUCTCAPTURE_WAO_OIDC_AUDIENCE: undefined,
+    STRUCTCAPTURE_LLM_BASE_URL: "https://llm.example.test",
+    STRUCTCAPTURE_LLM_API_KEY: "test-key",
+    STRUCTCAPTURE_WAO_INCLUDE_IMAGES: "false",
+  }, async () => {
+    assert.equal(isWaoConfigured(), true);
+    const authorizationHeaders: string[] = [];
+    global.fetch = async (input, init) => {
+      const url = String(input);
+      authorizationHeaders.push(String(new Headers(init?.headers).get("authorization")));
+      if (url.endsWith("/api/v1/agents")) {
+        return Response.json({ agents: [{
+          id: "00000000-0000-0000-0000-000000000001",
+          name: "structcapture-organizer",
+          business_domain: "structcapture",
+          tenant_id: "structcapture",
+          project_id: "default",
+        }] });
+      }
+      if (url.includes("/chat")) {
+        return Response.json({ answer: '{"summary":"WAO HS256 整理成功","items":[]}' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+
+    const result = await extract(session, [textShot]);
+    assert.equal(result.metaFields.find((field) => field.key === "summary")?.value, "WAO HS256 整理成功");
+    assert.equal(authorizationHeaders.length, 2);
+    assert.ok(authorizationHeaders.every((value) => value.startsWith("Bearer ")));
+  });
+});
 
 test("configured WAO failure is fail-closed and never calls the model gateway", async () => {
   await withEnvironment({
