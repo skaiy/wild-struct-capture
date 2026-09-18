@@ -229,6 +229,39 @@ test("an unconfigured WAO permits the explicitly configured model gateway", asyn
   });
 });
 
+test("model gateway uses enough completion tokens and accepts JSON from DeepSeek reasoning_content", async () => {
+  await withEnvironment({
+    WAO_BASE_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_TOKEN_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_ID: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET: undefined,
+    STRUCTCAPTURE_WAO_OIDC_ISSUER: undefined,
+    STRUCTCAPTURE_WAO_OIDC_AUDIENCE: undefined,
+    STRUCTCAPTURE_LLM_BASE_URL: "https://llm.example.test",
+    STRUCTCAPTURE_LLM_API_KEY: "test-key",
+    STRUCTCAPTURE_LLM_INCLUDE_IMAGES: "false",
+  }, async () => {
+    global.fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.max_tokens, 4_096);
+      return Response.json({
+        choices: [{
+          finish_reason: "stop",
+          message: {
+            content: "",
+            reasoning_content: '{"summary":"来自推理字段的整理结果","items":[]}',
+          },
+        }],
+      });
+    };
+
+    for (const schemaId of ["home-inventory", "crash-prep"] as const) {
+      const result = await extract({ ...session, schemaId }, [textShot]);
+      assert.equal(result.metaFields.find((field) => field.key === "summary")?.value, "来自推理字段的整理结果");
+    }
+  });
+});
+
 test("a configured text-only model gateway failure is fail-closed", async () => {
   await withEnvironment({
     WAO_BASE_URL: undefined,
