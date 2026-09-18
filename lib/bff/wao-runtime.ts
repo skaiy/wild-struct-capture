@@ -31,6 +31,7 @@ export type EnrichmentFailureCode =
   | "wao_unavailable"
   | "wao_invalid_response"
   | "llm_timeout"
+  | "llm_upstream_error"
   | "llm_unavailable"
   | "llm_invalid_response";
 
@@ -383,13 +384,18 @@ export async function enrichWithWaoAgent(
   }
 }
 
-function chatCompletionsUrl() {
+export function chatCompletionsUrl() {
   const value = process.env.STRUCTCAPTURE_LLM_BASE_URL?.trim();
   if (!value || !process.env.STRUCTCAPTURE_LLM_API_KEY?.trim()) return null;
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    url.pathname = `${url.pathname.replace(/\/$/, "").replace(/\/v1$/, "")}/v1/chat/completions`;
+    const pathname = url.pathname.replace(/\/+$/, "");
+    url.pathname = pathname.endsWith("/v1/chat/completions")
+      ? pathname
+      : pathname.endsWith("/v1")
+        ? `${pathname}/chat/completions`
+        : `${pathname}/v1/chat/completions`;
     return url.toString();
   } catch {
     return null;
@@ -449,13 +455,7 @@ function textFromResponse(payload: unknown): string | null {
 function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): WaoEnrichment | null {
   const text = textFromResponse(payload);
   if (!text) return null;
-  const json = text.match(/```(?:json|python|javascript|js|typescript|ts)?\s*([\s\S]*?)```/i)?.[1]?.trim() ?? text.trim();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return null;
-  }
+  const parsed = jsonFromModelText(text);
   if (!parsed || typeof parsed !== "object") return null;
   const record = parsed as Record<string, unknown>;
   const fields: WaoEnrichment["fields"] = {};
@@ -480,6 +480,49 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): 
     : undefined;
   const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined;
   return summary || Object.keys(fields).length || items?.length ? { summary, fields, items } : null;
+}
+
+function jsonFromModelText(text: string): unknown {
+  const fenced = text.match(/```(?:json|python|javascript|js|typescript|ts)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  for (const candidate of [fenced, text.trim()]) {
+    if (!candidate) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // A reasoning trace can include prose before the final JSON object.
+    }
+  }
+
+  let lastJson: unknown;
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== "{") continue;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let end = start; end < text.length; end += 1) {
+      const character = text[end];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === "\"") quoted = false;
+        continue;
+      }
+      if (character === "\"") quoted = true;
+      else if (character === "{") depth += 1;
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            lastJson = JSON.parse(text.slice(start, end + 1));
+          } catch {
+            // Continue looking for a later complete JSON object.
+          }
+          break;
+        }
+      }
+    }
+  }
+  return lastJson;
 }
 
 function parseEnrichmentItem(
@@ -549,13 +592,13 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
   }
 
   const images = imagesEnabled ? await prepareVisionImages(shots.map((shot) => shot.imageUrl)) : null;
+  const startedAt = Date.now();
 
   try {
     if (imagesEnabled && hasImageInput(shots) && !images?.urls.length) {
       throw new VisionEnrichmentError("vision_unavailable", "图片无法处理，未发起图片识别；请更换图片或关闭图片识别后重试。");
     }
     const response = await sendModelGatewayRequest(endpoint, apiKey, pack, shots, images);
-    if (response instanceof VisionEnrichmentError) throw response;
     if (!response?.ok) {
       if (images?.urls.length) {
         throw response
@@ -565,19 +608,48 @@ export async function enrichWithModelGateway(pack: KnowledgePack, shots: Shot[])
       console.warn("LLM enrichment request failed", {
         status: response?.status,
         includeImages: Boolean(images?.urls.length),
+        elapsedMs: Date.now() - startedAt,
       });
-      return null;
+      throw new EnrichmentError("llm_upstream_error", "模型服务请求失败，请稍后重试。");
     }
-    const enrichment = parseEnrichment(await response.json(), pack, shots);
+    const payload = await response.json().catch(() => null);
+    const choice = payload && typeof payload === "object" && Array.isArray((payload as Record<string, unknown>).choices)
+      ? (payload as { choices: Array<{ finish_reason?: unknown; message?: { content?: unknown; reasoning_content?: unknown } }> }).choices[0]
+      : undefined;
+    const content = choice?.message?.content;
+    const reasoningContent = choice?.message?.reasoning_content;
+    console.info("LLM enrichment response", {
+      finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined,
+      contentLen: typeof content === "string" ? content.length : 0,
+      reasoningLen: typeof reasoningContent === "string" ? reasoningContent.length : 0,
+      elapsedMs: Date.now() - startedAt,
+    });
+    const enrichment = parseEnrichment(payload, pack, shots);
     if (images?.urls.length && !enrichment) {
       throw new VisionEnrichmentError("vision_unavailable", "图片识别服务未返回有效结果，请稍后重试或关闭图片识别后重试。");
     }
+    if (!enrichment) {
+      throw new EnrichmentError("llm_invalid_response", "模型服务未返回有效整理结果，请稍后重试。");
+    }
     return enrichment;
   } catch (error) {
-    if (error instanceof VisionEnrichmentError) throw error;
-    console.warn("LLM enrichment request failed", { includeImages: Boolean(images?.urls.length) });
-    return null;
+    if (error instanceof EnrichmentError) throw error;
+    const code = isTimeoutError(error) ? "llm_timeout" : "llm_upstream_error";
+    console.warn("LLM enrichment request failed", {
+      code,
+      includeImages: Boolean(images?.urls.length),
+      elapsedMs: Date.now() - startedAt,
+    });
+    throw new EnrichmentError(
+      code,
+      code === "llm_timeout" ? "模型服务响应超时，请稍后重试。" : "模型服务请求失败，请稍后重试。",
+    );
   }
+}
+
+function isTimeoutError(error: unknown) {
+  return error instanceof DOMException && error.name === "TimeoutError"
+    || error instanceof Error && error.name === "AbortError";
 }
 
 async function sendWaoChat(
@@ -613,23 +685,22 @@ async function sendModelGatewayRequest(
 ) {
   const prompt = buildPrompt(pack, shots, images?.shotNumbers);
   const imageParts = images?.urls.map((url) => ({ type: "image_url", image_url: { url } })) ?? [];
-  try {
-    return await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: process.env.STRUCTCAPTURE_LLM_MODEL?.trim() || "deepseek-v4-flash",
-        messages: [
-          { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON，且严格遵守用户给出的知识包 schema。" },
-          { role: "user", content: imageParts.length ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
-        ],
-        temperature: 0.1,
-        max_tokens: MODEL_GATEWAY_MAX_TOKENS,
-      }),
-      cache: "no-store",
-      signal: AbortSignal.timeout(requestTimeout(imageParts.length > 0)),
-    });
-  } catch (error) {
-    return imageParts.length ? visionFailureFromError(error) : null;
-  }
+  const model = process.env.STRUCTCAPTURE_LLM_MODEL?.trim() || "deepseek-v4-flash";
+  return fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: "你是通用的结构化信息提取助手。输出必须是有效 JSON，且严格遵守用户给出的知识包 schema。" },
+        { role: "user", content: imageParts.length ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
+      ],
+      temperature: 0.1,
+      max_tokens: MODEL_GATEWAY_MAX_TOKENS,
+      response_format: { type: "json_object" },
+      ...(model.toLowerCase().includes("deepseek") ? { thinking: { type: "disabled" } } : {}),
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(requestTimeout(imageParts.length > 0)),
+  });
 }

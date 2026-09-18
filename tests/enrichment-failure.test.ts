@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 import { extract } from "@/lib/bff/capture-service";
-import { EnrichmentError, isWaoConfigured, mintHs256WorkloadToken } from "@/lib/bff/wao-runtime";
+import { chatCompletionsUrl, EnrichmentError, isWaoConfigured, mintHs256WorkloadToken } from "@/lib/bff/wao-runtime";
 import type { CaptureSession, Shot } from "@/lib/types";
 
 const session: CaptureSession = {
@@ -244,6 +244,8 @@ test("model gateway uses enough completion tokens and accepts JSON from DeepSeek
     global.fetch = async (_input, init) => {
       const request = JSON.parse(String(init?.body));
       assert.equal(request.max_tokens, 4_096);
+      assert.deepEqual(request.thinking, { type: "disabled" });
+      assert.deepEqual(request.response_format, { type: "json_object" });
       return Response.json({
         choices: [{
           finish_reason: "stop",
@@ -262,6 +264,71 @@ test("model gateway uses enough completion tokens and accepts JSON from DeepSeek
   });
 });
 
+test("model gateway uses the final JSON object embedded in reasoning_content", async () => {
+  await withEnvironment({
+    WAO_BASE_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_TOKEN_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_ID: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET: undefined,
+    STRUCTCAPTURE_WAO_OIDC_ISSUER: undefined,
+    STRUCTCAPTURE_WAO_OIDC_AUDIENCE: undefined,
+    STRUCTCAPTURE_LLM_BASE_URL: "https://llm.example.test",
+    STRUCTCAPTURE_LLM_API_KEY: "test-key",
+    STRUCTCAPTURE_LLM_INCLUDE_IMAGES: "false",
+  }, async () => {
+    global.fetch = async () => Response.json({
+      choices: [{
+        finish_reason: "stop",
+        message: {
+          content: "",
+          reasoning_content: "提取完毕。最终结果：{\"summary\":\"推理末尾的 JSON\",\"items\":[]}",
+        },
+      }],
+    });
+
+    const result = await extract(session, [textShot]);
+    assert.equal(result.metaFields.find((field) => field.key === "summary")?.value, "推理末尾的 JSON");
+  });
+});
+
+test("model gateway timeout returns llm_timeout", async () => {
+  await withEnvironment({
+    WAO_BASE_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_TOKEN_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_ID: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET: undefined,
+    STRUCTCAPTURE_WAO_OIDC_ISSUER: undefined,
+    STRUCTCAPTURE_WAO_OIDC_AUDIENCE: undefined,
+    STRUCTCAPTURE_LLM_BASE_URL: "https://llm.example.test",
+    STRUCTCAPTURE_LLM_API_KEY: "test-key",
+    STRUCTCAPTURE_LLM_INCLUDE_IMAGES: "false",
+  }, async () => {
+    global.fetch = async () => {
+      throw new DOMException("request timed out", "TimeoutError");
+    };
+
+    await assert.rejects(
+      () => extract(session, [textShot]),
+      (error: unknown) => error instanceof EnrichmentError && error.code === "llm_timeout",
+    );
+  });
+});
+
+test("chat completions URL accepts an origin, v1 base, or full endpoint", async () => {
+  for (const [baseUrl, expected] of [
+    ["https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"],
+    ["https://api.deepseek.com/v1", "https://api.deepseek.com/v1/chat/completions"],
+    ["https://api.deepseek.com/v1/chat/completions", "https://api.deepseek.com/v1/chat/completions"],
+  ]) {
+    await withEnvironment({
+      STRUCTCAPTURE_LLM_BASE_URL: baseUrl,
+      STRUCTCAPTURE_LLM_API_KEY: "test-key",
+    }, async () => {
+      assert.equal(chatCompletionsUrl(), expected);
+    });
+  }
+});
+
 test("a configured text-only model gateway failure is fail-closed", async () => {
   await withEnvironment({
     WAO_BASE_URL: undefined,
@@ -278,7 +345,7 @@ test("a configured text-only model gateway failure is fail-closed", async () => 
 
     await assert.rejects(
       () => extract(session, [textShot]),
-      (error: unknown) => error instanceof EnrichmentError && error.code === "llm_invalid_response",
+      (error: unknown) => error instanceof EnrichmentError && error.code === "llm_upstream_error",
     );
   });
 });
