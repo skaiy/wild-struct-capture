@@ -287,14 +287,14 @@ test("model gateway accepts crash-prep labels while home-inventory keys remain v
             finish_reason: "stop",
             message: {
               content: JSON.stringify({
-                items: [{
-                  fields: {
-                    "试验地点": { value: "碰撞试验场", confidence: "high" },
-                    "车辆方向": { value: "正前", confidence: "high" },
-                    "安全设备": { value: "警戒锥和灭火器", confidence: "medium" },
-                  },
-                  galleryShotIds: ["1"],
-                }],
+                summary: "车辆已在碰撞试验场完成安全布置。",
+                fields: {
+                  "试验地点": { value: "碰撞试验场", confidence: "high" },
+                  "车辆方向": { value: "左前45°", confidence: "high" },
+                  "安全设备": { value: "警戒锥和灭火器", confidence: "medium" },
+                  "车辆状态": { value: "车身完整", confidence: "medium" },
+                  "证据说明": { value: "正面及左前方照片已记录", confidence: "medium" },
+                },
               }),
             },
           }],
@@ -314,7 +314,8 @@ test("model gateway accepts crash-prep labels while home-inventory keys remain v
     const crashPrep = await extract({ ...session, schemaId: "crash-prep" }, [textShot]);
     assert.equal(crashPrep.status, "pending_hitl");
     assert.equal(crashPrep.items[0].fields.find((field) => field.key === "scene_location")?.value, "碰撞试验场");
-    assert.equal(crashPrep.items[0].fields.find((field) => field.key === "vehicle_direction")?.value, "正前");
+    assert.equal(crashPrep.items[0].fields.find((field) => field.key === "vehicle_direction")?.value, "前左45°");
+    assert.equal(crashPrep.items[0].fields.find((field) => field.key === "safety_equipment")?.value, "警戒锥和灭火器");
 
     const homeInventory = await extract(session, [textShot]);
     assert.equal(homeInventory.status, "pending_hitl");
