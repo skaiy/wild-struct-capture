@@ -3,6 +3,10 @@ import { isSchemaId, organize } from "@/lib/bff/capture-service";
 import { EnrichmentError } from "@/lib/bff/wao-runtime";
 import type { CaptureSession, Shot } from "@/lib/types";
 
+// Reasoning-capable gateways can take longer than the default function window.
+// Vercel applies the plan's effective ceiling to this requested value.
+export const maxDuration = 60;
+
 function enrichmentErrorResponse(error: EnrichmentError) {
   const status = error.code === "vision_payload_too_large"
     ? 413
