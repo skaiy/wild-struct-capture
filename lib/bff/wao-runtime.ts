@@ -2,6 +2,11 @@ import type { Shot } from "@/lib/types";
 import { prepareVisionImages, type PreparedVisionImages } from "@/lib/bff/vision";
 import { createHmac, createHash } from "node:crypto";
 
+// Reasoning models count their reasoning output and JSON answer against this
+// shared completion budget. 1,200 tokens can truncate the full knowledge-pack
+// request before the JSON answer is emitted.
+const MODEL_GATEWAY_MAX_TOKENS = 4_096;
+
 type KnowledgePack = {
   id: string;
   labels: Record<string, string>;
@@ -619,7 +624,7 @@ async function sendModelGatewayRequest(
           { role: "user", content: imageParts.length ? [{ type: "text", text: prompt }, ...imageParts] : prompt },
         ],
         temperature: 0.1,
-        max_tokens: 1_200,
+        max_tokens: MODEL_GATEWAY_MAX_TOKENS,
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(requestTimeout(imageParts.length > 0)),
