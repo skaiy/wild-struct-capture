@@ -425,10 +425,20 @@ function buildPrompt(pack: KnowledgePack, shots: Shot[], imageShotNumbers: numbe
     ...(imageShotNumbers.length
       ? [`本请求含 ${imageShotNumbers.length} 张图像，对应 shot 编号：${imageShotNumbers.join("、")}。请先观察图中标签、包装和场景的可见证据，再结合文字说明；图文冲突时保留已有证据并降低 confidence，不得用“待确认”擦除证据。`]
       : []),
-    `仅允许 summary、items 和 ${pack.schema.fields.map((field) => field.key).join("、")}。每个 tangible item 必须是一条独立 items 记录，未知写“待确认”。`,
+    `仅允许 summary、items 和 ${pack.schema.fields.map((field) => field.key).join("、")}。items.fields 必须使用这些英文键，不能使用字段标签：${pack.schema.fields.map((field) => `${field.key}（${pack.labels[field.key] ?? field.key}）`).join("、")}。`,
+    "每组同一场景证据都应是一条独立 items 记录，未知写“待确认”。",
     "绝不可把多件物品合并为使用“；”分隔的字段值。每个 item 的 fields 只描述该物品；galleryShotIds 填关联的拍摄记录编号（从 1 开始）。",
     "只返回 JSON，不要 Markdown：",
-    '{"summary":"string","items":[{"fields":{"field_key":{"value":"string","confidence":"high|medium"}},"galleryShotIds":["1"]}]}',
+    JSON.stringify({
+      summary: "string",
+      items: [{
+        fields: Object.fromEntries(pack.schema.fields.map((field) => [
+          field.key,
+          { value: "string", confidence: "high|medium" },
+        ])),
+        galleryShotIds: ["1"],
+      }],
+    }),
     `文字证据：${JSON.stringify(evidence)}`,
   ].join("\n");
 }
@@ -460,23 +470,27 @@ function parseEnrichment(payload: unknown, pack: KnowledgePack, shots: Shot[]): 
   const record = parsed as Record<string, unknown>;
   const fields: WaoEnrichment["fields"] = {};
   const allowedKeys = new Set(pack.schema.fields.map((field) => field.key));
+  const fieldKeysByLabel = new Map(pack.schema.fields.map((field) => [pack.labels[field.key], field.key]));
+  const canonicalFieldKey = (key: string) => allowedKeys.has(key) ? key : fieldKeysByLabel.get(key);
   const inputFields = record.fields;
   if (inputFields && typeof inputFields === "object" && !Array.isArray(inputFields)) {
     for (const [key, rawField] of Object.entries(inputFields)) {
-      if (!allowedKeys.has(key)) continue;
+      const canonicalKey = canonicalFieldKey(key);
+      if (!canonicalKey) continue;
       const field = parseEnrichmentField(rawField, shots);
-      if (field) fields[key] = field;
+      if (field) fields[canonicalKey] = field;
     }
   }
   // WAO Agents can return the schema fields directly at the top level rather
   // than under `fields`. Preserve nested fields when both forms are present.
   for (const [key, rawField] of Object.entries(record)) {
-    if (!allowedKeys.has(key) || fields[key]) continue;
+    const canonicalKey = canonicalFieldKey(key);
+    if (!canonicalKey || fields[canonicalKey]) continue;
     const field = parseEnrichmentField(rawField, shots);
-    if (field) fields[key] = field;
+    if (field) fields[canonicalKey] = field;
   }
   const items = Array.isArray(record.items)
-    ? record.items.flatMap((rawItem) => parseEnrichmentItem(rawItem, allowedKeys, shots))
+    ? record.items.flatMap((rawItem) => parseEnrichmentItem(rawItem, allowedKeys, fieldKeysByLabel, shots))
     : undefined;
   const summary = typeof record.summary === "string" && record.summary.trim() ? record.summary.trim() : undefined;
   return summary || Object.keys(fields).length || items?.length ? { summary, fields, items } : null;
@@ -528,6 +542,7 @@ function jsonFromModelText(text: string): unknown {
 function parseEnrichmentItem(
   rawItem: unknown,
   allowedKeys: Set<string>,
+  fieldKeysByLabel: Map<string | undefined, string>,
   shots: Shot[],
 ): NonNullable<WaoEnrichment["items"]> {
   if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return [];
@@ -539,9 +554,10 @@ function parseEnrichmentItem(
     : item;
   const itemFields: WaoEnrichment["fields"] = {};
   for (const [key, rawField] of Object.entries(rawFields)) {
-    if (!allowedKeys.has(key)) continue;
+    const canonicalKey = allowedKeys.has(key) ? key : fieldKeysByLabel.get(key);
+    if (!canonicalKey) continue;
     const field = parseEnrichmentField(rawField, shots);
-    if (field) itemFields[key] = field;
+    if (field) itemFields[canonicalKey] = field;
   }
   if (!Object.keys(itemFields).length) return [];
   const galleryShotIds = Array.isArray(item.galleryShotIds)

@@ -52,7 +52,7 @@ STRUCTCAPTURE_LLM_MODEL=deepseek-v4-flash
 
 地址也可以是 `.../v1` 或完整的 `.../v1/chat/completions`；BFF 会规范化为一次 chat-completions 请求。对于模型名包含 `deepseek` 的请求，BFF 使用 DeepSeek 官方 `thinking: { type: "disabled" }` 和 JSON 输出模式，以避免推理令牌延迟最终 JSON；非 DeepSeek OpenAI 兼容网关不会收到这个 DeepSeek 专用参数。
 
-若该 Hobby 运行时的实际函数上限为约 10 秒，约 15 秒的推理模型响应不可能完成，即使客户端超时和 `maxDuration=60` 都已设置。此时应使用非推理模式/更快模型，或升级到允许该路由实际运行超过模型延迟的套餐；上线后用 Production 请求确认有效时长。模型网关超时会返回 `504` 和 `code=llm_timeout`；上游非 2xx 返回 `503` 和 `code=llm_upstream_error`；仅在成功响应无法解析为有效整理结果时才返回 `503` 和 `code=llm_invalid_response`。服务端日志只记录 `finishReason`、`contentLen`、`reasoningLen` 和 `elapsedMs`，不记录密钥、提示词或拍录内容。
+模型输出应使用知识包的英文 schema 键；BFF 也兼容知识包定义的中文字段标签，避免模型将 `试验地点` 等标签当作字段键时丢弃整条 crash-prep 结果。若该 Hobby 运行时的实际函数上限为约 10 秒，约 15 秒的推理模型响应不可能完成，即使客户端超时和 `maxDuration=60` 都已设置。此时应使用非推理模式/更快模型，或升级到允许该路由实际运行超过模型延迟的套餐；上线后用 Production 请求确认有效时长。模型网关超时会返回 `504` 和 `code=llm_timeout`；上游非 2xx 返回 `503` 和 `code=llm_upstream_error`；仅在成功响应无法解析为有效整理结果时才返回 `503` 和 `code=llm_invalid_response`。服务端日志只记录 `finishReason`、`contentLen`、`reasoningLen` 和 `elapsedMs`，不记录密钥、提示词或拍录内容。
 
 `WAO_BASE_URL` 只由服务端读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询 Agent 目录，并校验其 `structcapture/default` 隔离范围。完整配置 OIDC 或 HS256 认证后，Capture BFF 会以短期 workload JWT 为 Agent 目录和 `POST /api/v1/agents/{id}/chat` 发送 Bearer 认证。只要 WAO 被配置，目录、认证、scope、WAO 失败或超时都会直接返回错误，绝不会降级到 `STRUCTCAPTURE_LLM_*` 或本地整理路径。
 

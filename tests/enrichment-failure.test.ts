@@ -264,6 +264,64 @@ test("model gateway uses enough completion tokens and accepts JSON from DeepSeek
   });
 });
 
+test("model gateway accepts crash-prep labels while home-inventory keys remain valid", async () => {
+  await withEnvironment({
+    WAO_BASE_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_TOKEN_URL: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_ID: undefined,
+    STRUCTCAPTURE_WAO_OIDC_CLIENT_SECRET: undefined,
+    STRUCTCAPTURE_WAO_OIDC_ISSUER: undefined,
+    STRUCTCAPTURE_WAO_OIDC_AUDIENCE: undefined,
+    STRUCTCAPTURE_LLM_BASE_URL: "https://llm.example.test",
+    STRUCTCAPTURE_LLM_API_KEY: "test-key",
+    STRUCTCAPTURE_LLM_INCLUDE_IMAGES: "false",
+  }, async () => {
+    global.fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body));
+      const prompt = request.messages[1].content;
+      if (prompt.includes("知识包=crash-prep")) {
+        assert.match(prompt, /scene_location（试验地点）/);
+        assert.doesNotMatch(prompt, /"field_key"/);
+        return Response.json({
+          choices: [{
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify({
+                items: [{
+                  fields: {
+                    "试验地点": { value: "碰撞试验场", confidence: "high" },
+                    "车辆方向": { value: "正前", confidence: "high" },
+                    "安全设备": { value: "警戒锥和灭火器", confidence: "medium" },
+                  },
+                  galleryShotIds: ["1"],
+                }],
+              }),
+            },
+          }],
+        });
+      }
+      assert.match(prompt, /item_name（物品名称）/);
+      return Response.json({
+        choices: [{
+          finish_reason: "stop",
+          message: {
+            content: '{"items":[{"fields":{"item_name":{"value":"洗发水","confidence":"high"}},"galleryShotIds":["1"]}]}',
+          },
+        }],
+      });
+    };
+
+    const crashPrep = await extract({ ...session, schemaId: "crash-prep" }, [textShot]);
+    assert.equal(crashPrep.status, "pending_hitl");
+    assert.equal(crashPrep.items[0].fields.find((field) => field.key === "scene_location")?.value, "碰撞试验场");
+    assert.equal(crashPrep.items[0].fields.find((field) => field.key === "vehicle_direction")?.value, "正前");
+
+    const homeInventory = await extract(session, [textShot]);
+    assert.equal(homeInventory.status, "pending_hitl");
+    assert.equal(homeInventory.items[0].fields.find((field) => field.key === "item_name")?.value, "洗发水");
+  });
+});
+
 test("model gateway uses the final JSON object embedded in reasoning_content", async () => {
   await withEnvironment({
     WAO_BASE_URL: undefined,
