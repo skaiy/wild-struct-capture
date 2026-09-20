@@ -32,13 +32,27 @@ Vercel Hobby 的无状态 Serverless 实例不保证保留 BFF 内存。为使�
 | `STRUCTCAPTURE_WAO_HS256_TTL_SECONDS` | 可选 token TTL，限制 300–900 秒 | `600` | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_WAO_HS256_ISSUER` / `STRUCTCAPTURE_WAO_HS256_AUDIENCE` | WAO verifier 要求时的可选 claims | 留空或与 verifier 一致 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_WAO_INCLUDE_IMAGES` | `true` 仅在 WAO vision model 可访问图片 URL 时 | 通常 `false` | 本地 `.env.local` 可选 | 否 |
-| `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址 | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
+| `STRUCTCAPTURE_LLM_BASE_URL` | OpenAI 兼容模型网关地址（DeepSeek 推荐 `https://api.deepseek.com`） | 测试网关，或留空 | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_API_KEY` | 模型网关密钥 | 测试密钥，或留空 | 本地 `.env.local` 可选 | 否，不能加 `NEXT_PUBLIC_` |
 | `STRUCTCAPTURE_LLM_MODEL` | 模型名（可选） | 测试模型名（可选） | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_TIMEOUT_MS` | 超时毫秒（可选） | 测试值（可选） | 本地 `.env.local` 可选 | 否 |
 | `STRUCTCAPTURE_LLM_INCLUDE_IMAGES` | 仅在网关支持远程图片 URL 时设为 `true` | 通常保持 `false` | 本地 `.env.local` 可选 | 否 |
 
-`STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时服务端默认 `25000` 毫秒，限制在 `20000`–`30000` 毫秒；浏览器的整理请求等待窗口更长。该范围兼顾 MiniMax 等远程模型网关的响应时间和 Vercel 函数的可用性。`STRUCTCAPTURE_LLM_INCLUDE_IMAGES` 默认关闭，保持 MiniMax 兼容的文本请求；仅在网关明确支持 `image_url` 内容块且图片地址可访问时开启。
+`POST /api/wao/captures/organize` 请求 Vercel 最长运行 60 秒；最终有效上限仍由部署套餐和运行时决定。`STRUCTCAPTURE_LLM_TIMEOUT_MS` 未设置时服务端默认 `25000` 毫秒，允许 `20000`–`120000` 毫秒，但不能超过该有效上限。`STRUCTCAPTURE_LLM_INCLUDE_IMAGES` 默认关闭，保持文本请求；仅在网关明确支持 `image_url` 内容块且图片地址可访问时开启。
+
+### DeepSeek Production 运行说明
+
+Production 推荐仅在 Vercel 环境变量中设置：
+
+```dotenv
+STRUCTCAPTURE_LLM_BASE_URL=https://api.deepseek.com
+STRUCTCAPTURE_LLM_API_KEY=<server-side-secret>
+STRUCTCAPTURE_LLM_MODEL=deepseek-v4-flash
+```
+
+地址也可以是 `.../v1` 或完整的 `.../v1/chat/completions`；BFF 会规范化为一次 chat-completions 请求。对于模型名包含 `deepseek` 的请求，BFF 使用 DeepSeek 官方 `thinking: { type: "disabled" }` 和 JSON 输出模式，以避免推理令牌延迟最终 JSON；非 DeepSeek OpenAI 兼容网关不会收到这个 DeepSeek 专用参数。
+
+模型输出应使用知识包的英文 schema 键；BFF 也兼容知识包定义的中文字段标签，避免模型将 `试验地点` 等标签当作字段键时丢弃整条 crash-prep 结果。若该 Hobby 运行时的实际函数上限为约 10 秒，约 15 秒的推理模型响应不可能完成，即使客户端超时和 `maxDuration=60` 都已设置。此时应使用非推理模式/更快模型，或升级到允许该路由实际运行超过模型延迟的套餐；上线后用 Production 请求确认有效时长。模型网关超时会返回 `504` 和 `code=llm_timeout`；上游非 2xx 返回 `503` 和 `code=llm_upstream_error`；仅在成功响应无法解析为有效整理结果时才返回 `503` 和 `code=llm_invalid_response`。服务端日志只记录 `finishReason`、`contentLen`、`reasoningLen` 和 `elapsedMs`，不记录密钥、提示词或拍录内容。
 
 `WAO_BASE_URL` 只由服务端读取；手机浏览器始终请求同源网关，不会看到 VPS 地址。`STRUCTCAPTURE_WAO_AGENT_ID` 留空时按 `structcapture-organizer` 查询 Agent 目录，并校验其 `structcapture/default` 隔离范围。完整配置 OIDC 或 HS256 认证后，Capture BFF 会以短期 workload JWT 为 Agent 目录和 `POST /api/v1/agents/{id}/chat` 发送 Bearer 认证。只要 WAO 被配置，目录、认证、scope、WAO 失败或超时都会直接返回错误，绝不会降级到 `STRUCTCAPTURE_LLM_*` 或本地整理路径。
 
